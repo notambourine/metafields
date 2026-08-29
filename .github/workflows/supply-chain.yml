@@ -1,0 +1,65 @@
+name: supply-chain
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  betterleaks:
+    # cosign needs envsubst, which ubuntu-slim lacks and cannot install.
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # betterleaks git needs full history; no step pushes.
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+      - name: betterleaks secret scan
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          cd "${RUNNER_TEMP}"
+          # Resolve current rules each run; verification authenticates the release.
+          TAG=$(gh release view -R betterleaks/betterleaks --json tagName -q .tagName)
+          gh release download "$TAG" -R betterleaks/betterleaks \
+            -p 'betterleaks_*_linux_x64.tar.gz' -p checksums.txt -p checksums.txt.sigstore.json
+          # Keep verification separate; GitHub's bash lacks pipefail.
+          cosign verify-blob --bundle checksums.txt.sigstore.json \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+            --certificate-identity "https://github.com/betterleaks/betterleaks/.github/workflows/release.yml@refs/tags/${TAG}" \
+            checksums.txt
+          grep linux_x64 checksums.txt | sha256sum -c -
+          tar -xzf betterleaks_*_linux_x64.tar.gz betterleaks
+          # Redact findings and keep candidate secrets away from validation APIs.
+          ./betterleaks git "${GITHUB_WORKSPACE}" --no-banner --redact=100 --confidence medium
+
+  zizmor:
+    runs-on: ubuntu-slim
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+      - name: zizmor workflow audit
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Capture zizmor findings as JSON, then apply the fleet severity policy.
+          OUT=$(uvx zizmor --format json --min-severity=medium .github/workflows || true)
+          if ! jq -e 'type == "array"' <<<"$OUT" >/dev/null 2>&1; then
+            echo "::error::zizmor returned no valid JSON"; exit 1
+          fi
+          # Action pins have their own exact-release check.
+          HITS=$(jq '[.[] | select(.ident != "unpinned-uses")]' <<<"$OUT")
+          N=$(jq 'length' <<<"$HITS")
+          if [ "$N" -gt 0 ]; then
+            jq -r 'group_by(.ident) | map("\(.[0].ident)x\(length)") | join(", ")' <<<"$HITS"
+            echo "::error::zizmor found $N medium+ workflow finding(s)"; exit 1
+          fi

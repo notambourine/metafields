@@ -1,0 +1,18 @@
+name: Dash ratchet
+
+# Unicode dashes may only decrease. Contract and inputs:
+# https://github.com/notambourine/dash-ratchet
+concurrency:
+  group: dashes-pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  dashes:
+    uses: notambourine/dash-ratchet/.github/workflows/ratchet.yml@29c4bb09a6041cc859b436f2388e8b862dd13171 # v0.2.0

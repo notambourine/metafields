@@ -1,0 +1,11 @@
+# Merging a diff to any of these hands over execution: config dirs can auto-run commands,
+# manifests and lockfiles pick what the next install runs. No leading slash, so a nested
+# copy is owned from its first commit.
+.claude/ @tomfuertes
+.agents/ @tomfuertes
+.vscode/ @tomfuertes
+.github/ @tomfuertes
+
+package.json @tomfuertes
+package-lock.json @tomfuertes
+.npmrc @tomfuertes
