@@ -1,17 +1,48 @@
 name: Publish
 
+# Merging a version bump to main IS the release. A release created by GITHUB_TOKEN does
+# not emit release:published, so tag, release, and publish all happen in one job.
 on:
-  release:
-    types: [published]
+  push:
+    branches: [main]
 
 permissions:
   contents: read
-  id-token: write
 
 jobs:
-  npm:
+  version:
+    runs-on: ubuntu-slim
+    timeout-minutes: 5
+    outputs:
+      value: ${{ steps.read.outputs.value }}
+      changed: ${{ steps.read.outputs.changed }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          # HEAD~1 is what the version is compared against.
+          fetch-depth: 2
+          persist-credentials: false
+      - id: read
+        run: |
+          V=$(jq -r .version package.json)
+          PREV=$(git show HEAD~1:package.json | jq -r .version)
+          echo "value=$V" >>"$GITHUB_OUTPUT"
+          if [ "$V" = "$PREV" ]; then
+            echo "changed=false" >>"$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >>"$GITHUB_OUTPUT"
+          fi
+
+  release:
+    needs: version
+    if: needs.version.outputs.changed == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    permissions:
+      contents: write
+      id-token: write
+    env:
+      VERSION: ${{ needs.version.outputs.value }}
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
@@ -24,8 +55,10 @@ jobs:
       # No sfw here: its registry proxy sits in front of the OIDC exchange npm publish
       # needs, and CI already installed this exact lockfile behind the firewall.
       - run: npm ci
-      - name: Verify release tag
-        run: test "${GITHUB_REF_NAME#v}" = "$(jq -r .version package.json)"
       - run: npm run check
       - run: npm test
+      - name: Tag and release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release create "v${VERSION}" --target "$GITHUB_SHA" --generate-notes
       - run: npm publish
