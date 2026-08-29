@@ -26,6 +26,7 @@ const schema = defineSchema({
         faq: field.metaobject('faq'),
         payload: field.json<{ enabled: boolean }>(),
         prices: field.list(field.decimal()),
+        sku: field.string({ required: true }),
       },
     },
   },
@@ -36,9 +37,15 @@ type Metafields = InferMetafields<typeof schema>;
 
 const object: Objects['faq'] = { question: 'Why?' };
 const decimal: Decimal | undefined = object.rank;
-const reference: MetaobjectReference<'faq'> | undefined = ({} as Metafields).product!.custom!.faq;
+const reference: MetaobjectReference<'faq'> | undefined = ({} as Metafields).product.custom.faq;
+const sku: string = ({} as Metafields).product.custom.sku;
 void decimal;
 void reference;
+void sku;
+
+// @ts-expect-error required metafields are not optional
+const missingSku: Metafields['product']['custom'] = { payload: { enabled: true } };
+void missingSku;
 
 // @ts-expect-error required fields stay required
 const missingQuestion: Objects['faq'] = {};
