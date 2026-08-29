@@ -30,3 +30,18 @@ jobs:
       - run: sfw npm ci
       - run: npm run check
       - run: npm test
+
+  version-bump:
+    # Merging a version bump is what publishes, so a shipped change with no bump lands on
+    # main and never reaches npm. PR-only: on main the bump has already been decided.
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-slim
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: ./scripts/check-version-bump.sh "$BASE_SHA"
