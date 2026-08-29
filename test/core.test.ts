@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
-import { readFile } from 'node:fs/promises';
+import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { promisify } from 'node:util';
 import test from 'node:test';
 import {
@@ -8,6 +10,7 @@ import {
   compileSchema,
   defineMigration,
   defineSchema,
+  emitLiquidMetafields,
   exitCodeForPlan,
   field,
   metaobject,
@@ -142,6 +145,40 @@ test('generated pull output is deterministic and uses json unknown', () => {
     }],
   });
   assert.match(output, /payload: field\.json<unknown>\(\{ name: "Payload" \}\)/);
+});
+
+test('liquid emit maps owner handles and drops owners the language server cannot group', () => {
+  const { definitions, skipped } = emitLiquidMetafields(compileSchema(defineSchema({
+    metaobjects: {},
+    metafields: {
+      product: { custom: { promo_text: field.string({ name: 'Promo text' }), prices: field.list(field.decimal()) } },
+      product_variant: { custom: { swatch: field.file() } },
+      customer: { custom: { tier: field.string() } },
+    },
+  })));
+  assert.deepEqual(Object.keys(definitions).sort(), ['product', 'variant']);
+  assert.deepEqual(definitions.product.map((item) => item.key), ['prices', 'promo_text']);
+  assert.deepEqual(definitions.product[0], {
+    key: 'prices', name: 'Prices', namespace: 'custom', description: '',
+    type: { category: 'NUMBER', name: 'list.number_decimal' },
+  });
+  assert.deepEqual(definitions.product[1].type, { category: 'TEXT', name: 'single_line_text_field' });
+  assert.equal(definitions.variant[0].type.name, 'file_reference');
+  assert.deepEqual(skipped, ['customer:custom.tier']);
+});
+
+test('CLI emit writes a metafields file and refuses to clobber unrelated content', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'metafields-emit-'));
+  const target = join(directory, '.shopify', 'metafields.json');
+  const run = () => execFileAsync(process.execPath, [
+    './dist/cli.js', 'emit', './test/fixture-schema.ts', '--liquid', '--out', target,
+  ]);
+  await run();
+  const written = JSON.parse(await readFile(target, 'utf8')) as Record<string, unknown[]>;
+  assert.equal((written.product[0] as { key: string }).key, 'faq_ref');
+  await run();
+  await writeFile(target, 'theme source, not generated\n');
+  await assert.rejects(run(), /is not a generated metafields file/);
 });
 
 test('migration artifacts are copy-only and checksum protected', () => {

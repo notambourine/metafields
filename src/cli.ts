@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-import { open, readFile } from 'node:fs/promises';
-import { resolve } from 'node:path';
+import { mkdir, open, readFile, writeFile } from 'node:fs/promises';
+import { dirname, resolve } from 'node:path';
 import { AdminClient, DEFAULT_API_VERSION, synchronize } from './admin.js';
 import { generateSchemaModule } from './generator.js';
 import { loadDefault, loadSchema } from './loader.js';
@@ -11,12 +11,13 @@ import {
   MIGRATION_MARKER,
   runMigration,
 } from './migration.js';
+import { emitLiquidMetafields, isLiquidMetafieldsFile } from './liquid.js';
 import { exitCodeForPlan, type Plan } from './planner.js';
 import { pullSchema } from './pull.js';
 import { compileSchema, OWNER_TYPES, SCHEMA_MARKER, stringifyCanonical, type Owner } from './schema.js';
 
 interface Arguments {
-  command: 'sync' | 'pull' | 'compile' | 'migrate' | 'help' | 'version';
+  command: 'sync' | 'pull' | 'compile' | 'emit' | 'migrate' | 'help' | 'version';
   positional: string[];
   values: Map<string, string[]>;
   flags: Set<string>;
@@ -24,7 +25,8 @@ interface Arguments {
 
 const valueOptions = new Set(['store', 'api-version', 'owner', 'namespace', 'out']);
 const booleanOptions = new Set([
-  'apply', 'check', 'json', 'validate', 'metaobjects', 'all-owners', 'all-namespaces', 'help', 'version',
+  'apply', 'check', 'json', 'validate', 'metaobjects', 'all-owners', 'all-namespaces', 'liquid',
+  'help', 'version',
 ]);
 
 async function main(argv: string[]): Promise<number> {
@@ -41,6 +43,7 @@ async function main(argv: string[]): Promise<number> {
     throw new Error('--apply and --check are mutually exclusive');
   }
   if (args.command === 'compile') return compileCommand(args);
+  if (args.command === 'emit') return emitCommand(args);
   if (args.command === 'pull') return pullCommand(args);
   if (args.command === 'migrate') return migrateCommand(args);
   return syncCommand(args);
@@ -116,6 +119,45 @@ async function compileCommand(args: Arguments): Promise<number> {
   return 0;
 }
 
+async function emitCommand(args: Arguments): Promise<number> {
+  const path = onlyPositional(args, 'schema module');
+  if (!args.flags.has('liquid')) throw new Error('emit requires an output format: --liquid');
+  const { definitions, skipped } = emitLiquidMetafields(await loadSchema(path));
+  const text = stringifyCanonical(definitions);
+  const out = oneValue(args, 'out', false);
+  if (!out) {
+    process.stdout.write(text);
+    for (const identity of skipped) process.stderr.write(`SKIPPED ${identity}\n`);
+    return 0;
+  }
+  const target = resolve(process.cwd(), out);
+  await assertGeneratedTarget(target);
+  await mkdir(dirname(target), { recursive: true });
+  await writeFile(target, text);
+  output(args, { status: 'written', out, skipped }, `WROTE ${out}\n`);
+  return 0;
+}
+
+// The target is a regenerated editor cache, so emit replaces it. Anything that is not
+// already one is refused rather than overwritten.
+async function assertGeneratedTarget(target: string): Promise<void> {
+  let existing: string;
+  try {
+    existing = await readFile(target, 'utf8');
+  } catch {
+    return;
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(existing);
+  } catch {
+    parsed = undefined;
+  }
+  if (!isLiquidMetafieldsFile(parsed)) {
+    throw new Error(`${target} exists and is not a generated metafields file; remove it first`);
+  }
+}
+
 async function migrateCommand(args: Arguments): Promise<number> {
   const path = onlyPositional(args, 'compiled migration');
   const migration = JSON.parse(await readFile(resolve(process.cwd(), path), 'utf8')) as unknown;
@@ -138,7 +180,7 @@ function parseArguments(argv: string[]): Arguments {
   let command: Arguments['command'] = 'sync';
   const rest = [...argv];
   const first = rest[0];
-  if (first && ['sync', 'pull', 'compile', 'migrate', 'help', 'version'].includes(first)) {
+  if (first && ['sync', 'pull', 'compile', 'emit', 'migrate', 'help', 'version'].includes(first)) {
     command = rest.shift() as Arguments['command'];
   }
   while (rest.length > 0) {
@@ -172,6 +214,7 @@ function modeFrom(args: Arguments): 'dry-run' | 'check' | 'apply' {
 
 function clientFrom(args: Arguments): AdminClient {
   const store = oneValue(args, 'store', true);
+  // guarddog: documented auth input, read here only to reach the store the user named.
   const token = process.env.SHOPIFY_ADMIN_ACCESS_TOKEN ?? '';
   return new AdminClient({
     store,
@@ -235,6 +278,7 @@ Usage:
   metafields pull --store <store.myshopify.com> --owner <owner> --namespace <namespace>
                   [--metaobjects] [--out <schema.ts>]
   metafields compile <schema-or-migration.ts> [--out <compiled.json>]
+  metafields emit <schema.ts> --liquid [--out .shopify/metafields.json]
   metafields migrate <compiled-migration.json> --store <store.myshopify.com>
                      [--apply | --check] [--json]
 
@@ -242,6 +286,7 @@ Options:
   --api-version <YYYY-MM>  Shopify Admin API version (default: ${DEFAULT_API_VERSION})
   --all-owners             Pull every supported owner type
   --all-namespaces         Pull every merchant-owned namespace
+  --liquid                 Emit Liquid editor metafield definitions
   --help                   Show help
   --version                Show version
 `;
