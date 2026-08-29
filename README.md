@@ -41,7 +41,38 @@ secret-bearing workflow consumes pull-request output.
 
 Schema modules use Node's built-in type stripping and must use erasable TypeScript syntax.
 
-See `metafields --help` for `pull`, `compile`, and migration commands.
+See `metafields --help` for `pull`, `compile`, `emit`, and migration commands.
+
+## Types
+
+The schema is the single declaration. Value types come back out of it with `InferMetafields` and
+`InferMetaobjects`, and fields declared `required: true` are not optional in the inferred type:
+
+```ts
+type Product = InferMetafields<typeof schema>['product'];
+
+const promo: string | undefined = product.custom.promo_text;
+const sku: string = product.custom.sku; // declared required
+```
+
+## Liquid
+
+`emit --liquid` writes `.shopify/metafields.json`, the file Shopify's Liquid language server reads
+to complete and hover `product.metafields.custom.promo_text`:
+
+```sh
+metafields emit ./schema.ts --liquid --out .shopify/metafields.json
+```
+
+Generating it from the schema means completions work without a store login, and cover definitions
+that are declared but not yet created. This drives editor assistance only: no theme-check rule
+validates metafields, so nothing here fails a build.
+
+The file's shape carries less than the schema does. It has no field for `required`, validations, or
+access, it cannot represent metaobject definitions, and it has no group for `customer` or
+`draft_order` metafields, which are reported as skipped. Treat it as a generated artifact: `emit`
+replaces an existing one and refuses to overwrite a file it did not generate. Shopify's own
+`shopify theme metafields pull` overwrites the same path, so do not hand-edit it.
 
 ## Behavior
 

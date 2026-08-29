@@ -134,9 +134,9 @@ export type InferMetaobjects<S extends SchemaDefinition> = {
 
 export type InferMetafields<S extends SchemaDefinition> = {
   [O in keyof S['metafields']]: {
-    [N in keyof S['metafields'][O]]: {
-      [K in keyof S['metafields'][O][N]]?: FieldValue<S['metafields'][O][N][K]>;
-    };
+    [N in keyof S['metafields'][O]]: S['metafields'][O][N] extends Fields
+      ? InferFields<S['metafields'][O][N]>
+      : never;
   };
 };
 
