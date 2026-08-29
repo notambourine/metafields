@@ -30,11 +30,11 @@ const booleanOptions = new Set([
 async function main(argv: string[]): Promise<number> {
   const args = parseArguments(argv);
   if (args.command === 'help' || args.flags.has('help')) {
-    process.stdout.write(HELP);
+    process.stdout.write(await help());
     return 0;
   }
   if (args.command === 'version' || args.flags.has('version')) {
-    process.stdout.write('0.0.1\n');
+    process.stdout.write(`${await packageVersion()}\n`);
     return 0;
   }
   if (args.flags.has('apply') && args.flags.has('check')) {
@@ -218,7 +218,16 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-const HELP = `@notambourine/metafields 0.0.1
+async function packageVersion(): Promise<string> {
+  const value = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8')) as unknown;
+  if (!isRecord(value) || typeof value.version !== 'string') {
+    throw new Error('package.json has no version');
+  }
+  return value.version;
+}
+
+async function help(): Promise<string> {
+  return `@notambourine/metafields ${await packageVersion()}
 
 Usage:
   metafields <schema.ts> --validate
@@ -236,6 +245,7 @@ Options:
   --help                   Show help
   --version                Show version
 `;
+}
 
 main(process.argv.slice(2)).then((code) => {
   process.exitCode = code;
