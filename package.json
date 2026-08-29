@@ -31,7 +31,7 @@
   ],
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
-    "check": "tsc --noEmit && tsc -p test-d/tsconfig.json --noEmit",
+    "check": "tsc --noEmit && tsc -p test/tsconfig.json --noEmit && tsc -p test-d/tsconfig.json --noEmit",
     "test": "npm run build && node --test test/*.test.ts",
     "prepack": "npm run build"
   },
