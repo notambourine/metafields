@@ -124,9 +124,11 @@ export class AdminClient {
 
   async readMetafield(definition: Pick<CanonicalMetafield, 'ownerType' | 'namespace' | 'key'>): Promise<ExistingMetafield | null> {
     const data = await this.request<{ metafieldDefinition: RawMetafield | null }>(METAFIELD_QUERY, {
-      ownerType: definition.ownerType,
-      namespace: definition.namespace,
-      key: definition.key,
+      identifier: {
+        ownerType: definition.ownerType,
+        namespace: definition.namespace,
+        key: definition.key,
+      },
     });
     return data.metafieldDefinition ? mapMetafield(data.metafieldDefinition) : null;
   }
@@ -337,9 +339,11 @@ query MetaobjectDefinition($type: String!) {
   }
 }`;
 
+// Owner, namespace and key travel in `identifier`, never as top-level arguments: the only other
+// selector is `id`, which is deprecated and which a schema-first tool has no way to know.
 const METAFIELD_QUERY = `
-query MetafieldDefinition($ownerType: MetafieldOwnerType!, $namespace: String!, $key: String!) {
-  metafieldDefinition(ownerType: $ownerType, namespace: $namespace, key: $key) {
+query MetafieldDefinition($identifier: MetafieldDefinitionIdentifierInput!) {
+  metafieldDefinition(identifier: $identifier) {
     id namespace key ownerType name description type { name }
     validations { name value }
     access { admin storefront customerAccount }

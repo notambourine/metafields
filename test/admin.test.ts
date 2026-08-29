@@ -25,6 +25,25 @@ test('read requests retry transient HTTP responses without exposing tokens', asy
   assert.equal(attempts, 2);
 });
 
+// The escape this closes: every other test here stubs readSchema, so nothing ever sent the
+// metafield query, and 0.0.1 through 0.0.4 shipped one no Shopify API version accepts.
+test('metafield reads select by identifier, the only selector that is not deprecated', async () => {
+  let sent = { query: '', variables: {} as Record<string, unknown> };
+  const client = new AdminClient({
+    store: 'example.myshopify.com',
+    token: 'shpat_x',
+    fetch: async (_input, init) => {
+      sent = JSON.parse(String(init?.body)) as typeof sent;
+      return response({ data: { metafieldDefinition: null } });
+    },
+  });
+  await client.readMetafield({ ownerType: 'PRODUCT', namespace: 'custom', key: 'promo_text' });
+  assert.match(sent.query, /metafieldDefinition\(identifier: \$identifier\)/);
+  assert.deepEqual(sent.variables, {
+    identifier: { ownerType: 'PRODUCT', namespace: 'custom', key: 'promo_text' },
+  });
+});
+
 test('apply creates metaobjects before metafields and verifies afterward', async () => {
   const desired = compileSchema(defineSchema({
     metaobjects: { faq: metaobject({ name: 'FAQ', fields: { title: field.string() } }) },
