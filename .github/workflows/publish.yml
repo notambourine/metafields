@@ -19,6 +19,8 @@ jobs:
           registry-url: https://registry.npmjs.org
           package-manager-cache: false
       - run: npm ci
+      - name: Verify release tag
+        run: test "${GITHUB_REF_NAME#v}" = "$(jq -r .version package.json)"
       - run: npm run check
       - run: npm test
       - run: npm publish
