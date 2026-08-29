@@ -9,7 +9,8 @@ permissions:
   contents: read
 
 jobs:
-  test:
+  verify:
+    name: node ${{ matrix.node }}
     runs-on: ubuntu-latest
     strategy:
       matrix:
