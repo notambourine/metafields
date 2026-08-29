@@ -1,0 +1,46 @@
+{
+  "name": "@notambourine/metafields",
+  "version": "0.0.1",
+  "description": "Create-only Shopify custom-data schema CLI",
+  "type": "module",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/notambourine/metafields.git"
+  },
+  "bugs": {
+    "url": "https://github.com/notambourine/metafields/issues"
+  },
+  "homepage": "https://github.com/notambourine/metafields#readme",
+  "engines": {
+    "node": ">=22.18"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "bin": {
+    "metafields": "./dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "check": "tsc --noEmit && tsc -p test-d/tsconfig.json --noEmit",
+    "test": "npm run build && node --test test/*.test.ts",
+    "prepack": "npm run build"
+  },
+  "devDependencies": {
+    "@types/node": "^25.6.0",
+    "typescript": "^6.0.3"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  }
+}
