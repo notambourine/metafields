@@ -3,8 +3,6 @@ import {
   FIELD_MARKER,
   METAOBJECT_MARKER,
   SCHEMA_MARKER,
-  type FieldDefinition,
-  type SchemaDefinition,
   type Validation,
 } from './types.js';
 

@@ -29,7 +29,7 @@ import {
 
 type RequiredFlag<O> = O extends { readonly required: true } ? true : false;
 
-function validations(options: Record<string, unknown>, numeric = false): Validation[] {
+function validations(options: Record<string, unknown>): Validation[] {
   const result: Validation[] = [];
   for (const name of ['min', 'max', 'regex'] as const) {
     const value = options[name];
