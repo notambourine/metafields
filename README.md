@@ -51,8 +51,11 @@ distinct in the output because a fleet treats them differently: `app_not_install
 has not installed the app, `shop_not_permitted` means the app and the store are in different
 organizations.
 
-`SHOPIFY_ADMIN_ACCESS_TOKEN` still works, and reaches one store. App credentials win when both are
-set. Minted tokens are never logged, and Shopify credential prefixes are redacted from errors.
+`SHOPIFY_ADMIN_ACCESS_TOKEN` still works and reaches one store; app auth is an option, not a
+requirement. Complete app credentials win when both are set, and half-set ones fall back to the
+token rather than failing. Only a fleet, which one token cannot reach, requires the app.
+
+Minted tokens are never logged, and Shopify credential prefixes are redacted from errors.
 
 ## Fleets
 

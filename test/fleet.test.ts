@@ -173,6 +173,22 @@ test('CLI accepts a repeated --store and refuses to serve a fleet from a single-
   );
 });
 
+// The failure has to be the store host, not auth: reaching AdminClient at all proves the
+// half-set app credentials fell back to the token rather than refusing the run.
+test('a half-set app client id falls back to the single-store token', async () => {
+  const reject = (args: string[], env: Record<string, string>) =>
+    cli(args, env).then(() => '', (error: { stderr?: string }) => error.stderr ?? '');
+  assert.match(
+    await reject(['./test/fixture-schema.ts', '--store', 'not-a-shop'],
+      { SHOPIFY_APP_CLIENT_ID: 'id', SHOPIFY_ADMIN_ACCESS_TOKEN: 'shpat_x' }),
+    /store must be a \*\.myshopify\.com host/,
+  );
+  assert.match(
+    await reject(['./test/fixture-schema.ts', '--store', 'not-a-shop'], { SHOPIFY_APP_CLIENT_ID: 'id' }),
+    /app auth needs both/,
+  );
+});
+
 test('CLI --validate exits 2 listing every over-long description', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'metafields-limits-'));
   const path = join(directory, 'schema.ts');
