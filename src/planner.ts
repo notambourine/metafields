@@ -43,6 +43,8 @@ export interface ExistingSchema {
 
 export type PlanStatus = 'CREATE' | 'PRESENT' | 'CONFLICT' | 'INDETERMINATE';
 
+export type SyncMode = 'dry-run' | 'check' | 'apply';
+
 export interface PlanItem {
   kind: 'metaobject' | 'metafield';
   identity: string;
@@ -113,7 +115,14 @@ function compareDeclared(
   }
 }
 
-function compareField(desired: CanonicalField, existing: ExistingField, path: string): string[] {
+function compareField(
+  desired: CanonicalField,
+  existing: ExistingField,
+  path: string,
+  // Only metaobject fields carry `required`; on a metafield the flag is a type-level
+  // assertion the Admin API neither stores nor returns, so comparing it invents a conflict.
+  comparesRequired = true,
+): string[] {
   const reasons: string[] = [];
   if (typeName(existing.type) !== desired.type) {
     reasons.push(`${path}.type: expected ${desired.type}, found ${typeName(existing.type)}`);
@@ -121,7 +130,7 @@ function compareField(desired: CanonicalField, existing: ExistingField, path: st
   if (normalizedValidations(existing.validations) !== normalizedValidations(desired.validations)) {
     reasons.push(`${path}.validations differ`);
   }
-  if (desired.required !== undefined && Boolean(existing.required) !== desired.required) {
+  if (comparesRequired && desired.required !== undefined && Boolean(existing.required) !== desired.required) {
     reasons.push(`${path}.required: expected ${String(desired.required)}, found ${String(Boolean(existing.required))}`);
   }
   compareDeclared(`${path}.access`, desired.access, existing.access, reasons);
@@ -194,7 +203,7 @@ export function planSchema(desired: CompiledSchema, existing: ExistingSchema): P
       items.push({ kind: 'metafield', identity, status: 'CREATE', reasons: [], notices: [], desired: definition });
       continue;
     }
-    const reasons = compareField(definition, found, identity);
+    const reasons = compareField(definition, found, identity, false);
     let status: PlanStatus = reasons.length > 0 ? 'CONFLICT' : 'PRESENT';
     if (found.validationStatus === 'SOME_INVALID') {
       status = 'CONFLICT';
@@ -222,7 +231,7 @@ export function planSchema(desired: CompiledSchema, existing: ExistingSchema): P
   };
 }
 
-export function exitCodeForPlan(plan: Plan, mode: 'dry-run' | 'check' | 'apply'): number {
+export function exitCodeForPlan(plan: Plan, mode: SyncMode): number {
   if (plan.indeterminate > 0) return 2;
   if (plan.conflicts > 0 || (mode === 'check' && plan.creates > 0)) return 1;
   return 0;

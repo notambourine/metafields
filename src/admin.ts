@@ -1,5 +1,6 @@
+import { assertDescriptionLengths } from './limits.js';
 import type { CanonicalMetafield, CanonicalMetaobject, CompiledSchema } from './schema.js';
-import type { ExistingMetafield, ExistingMetaobject, ExistingSchema, Plan } from './planner.js';
+import type { ExistingMetafield, ExistingMetaobject, ExistingSchema, Plan, SyncMode } from './planner.js';
 import { exitCodeForPlan, planSchema } from './planner.js';
 
 export const DEFAULT_API_VERSION = '2026-07';
@@ -8,10 +9,24 @@ export class AdminError extends Error {
   readonly requestId?: string;
 
   constructor(message: string, requestId?: string) {
-    super(message);
+    super(redactSecrets(message));
     this.name = 'AdminError';
     if (requestId !== undefined) this.requestId = requestId;
   }
+}
+
+export function normalizeStore(store: string): string {
+  const value = store.toLowerCase();
+  if (!/^[a-z0-9][a-z0-9-]*\.myshopify\.com$/.test(value)) {
+    throw new AdminError('store must be a *.myshopify.com host');
+  }
+  return value;
+}
+
+// Every Shopify credential prefix, not just the legacy shpat_ one, because a minted
+// client-credentials token is the value most likely to reach a fleet CI log.
+export function redactSecrets(message: string): string {
+  return message.replace(/shp(at|ca|pa|ss|us)_[A-Za-z0-9_-]+/g, '[REDACTED]');
 }
 
 interface GraphqlEnvelope<T> {
@@ -39,15 +54,12 @@ export class AdminClient {
   readonly #fetch: typeof globalThis.fetch;
 
   constructor(options: AdminClientOptions) {
-    const store = options.store.toLowerCase();
-    if (!/^[a-z0-9][a-z0-9-]*\.myshopify\.com$/.test(store)) {
-      throw new AdminError('store must be a *.myshopify.com host');
-    }
+    const store = normalizeStore(options.store);
     const apiVersion = options.apiVersion ?? DEFAULT_API_VERSION;
     if (!/^20\d{2}-(01|04|07|10)$/.test(apiVersion)) {
       throw new AdminError('API version must use YYYY-01, YYYY-04, YYYY-07, or YYYY-10');
     }
-    if (options.token.length === 0) throw new AdminError('SHOPIFY_ADMIN_ACCESS_TOKEN is required');
+    if (options.token.length === 0) throw new AdminError('an Admin access token is required');
     this.store = store;
     this.apiVersion = apiVersion;
     this.endpoint = `https://${store}/admin/api/${apiVersion}/graphql.json`;
@@ -156,20 +168,22 @@ export interface ApplyResult {
   applied: string[];
 }
 
-export async function synchronize(
+export async function planStore(client: AdminClient, schema: CompiledSchema): Promise<Plan> {
+  return planSchema(schema, await client.readSchema(schema));
+}
+
+export async function applyPlan(
   client: AdminClient,
   schema: CompiledSchema,
-  mode: 'dry-run' | 'check' | 'apply',
+  plan: Plan,
 ): Promise<ApplyResult> {
-  const before = planSchema(schema, await client.readSchema(schema));
-  if (mode !== 'apply' || exitCodeForPlan(before, mode) !== 0) return { plan: before, applied: [] };
   const applied: string[] = [];
   try {
-    for (const item of before.items.filter((value) => value.kind === 'metaobject' && value.status === 'CREATE')) {
+    for (const item of plan.items.filter((value) => value.kind === 'metaobject' && value.status === 'CREATE')) {
       await client.createMetaobject(item.desired as CanonicalMetaobject);
       applied.push(item.identity);
     }
-    for (const item of before.items.filter((value) => value.kind === 'metafield' && value.status === 'CREATE')) {
+    for (const item of plan.items.filter((value) => value.kind === 'metafield' && value.status === 'CREATE')) {
       await client.createMetafield(item.desired as CanonicalMetafield);
       applied.push(item.identity);
     }
@@ -182,6 +196,17 @@ export async function synchronize(
     throw new AdminError(`post-apply verification failed; created: ${applied.join(', ') || 'none'}`);
   }
   return { plan: after, applied };
+}
+
+export async function synchronize(
+  client: AdminClient,
+  schema: CompiledSchema,
+  mode: SyncMode,
+): Promise<ApplyResult> {
+  assertDescriptionLengths(schema);
+  const before = await planStore(client, schema);
+  if (mode !== 'apply' || exitCodeForPlan(before, mode) !== 0) return { plan: before, applied: [] };
+  return applyPlan(client, schema, before);
 }
 
 interface UserError { field?: string[]; message: string; code?: string }
@@ -311,8 +336,7 @@ function mapMetafield(value: RawMetafield): ExistingMetafield {
 
 function redactError(error: unknown): Error {
   if (error instanceof AdminError) return error;
-  const message = error instanceof Error ? error.message : String(error);
-  return new AdminError(message.replace(/shpat_[A-Za-z0-9_-]+/g, '[REDACTED]'));
+  return new AdminError(error instanceof Error ? error.message : String(error));
 }
 
 function backoff(attempt: number, retryAfter?: string | null): number {
