@@ -33,7 +33,10 @@ function toStoreValidations(
     if (!validation.name.endsWith('_types')) {
       return { name, value: definitionId(validation.value, idByType) };
     }
-    const types = listValue(validation.value) ?? [];
+    const types = listValue(validation.value);
+    if (types === null) {
+      throw new Error(`${validation.name} must be a JSON array of metaobject types: ${validation.value}`);
+    }
     return { name, value: JSON.stringify(types.map((type) => definitionId(type, idByType))) };
   });
 }
