@@ -1,7 +1,10 @@
 import { assertDescriptionLengths } from './limits.js';
-import type { CanonicalMetafield, CanonicalMetaobject, CompiledSchema } from './schema.js';
-import type { ExistingMetafield, ExistingMetaobject, ExistingSchema, Plan, SyncMode } from './planner.js';
+import type { CanonicalField, CanonicalMetafield, CanonicalMetaobject, CompiledSchema } from './schema.js';
+import type {
+  ExistingField, ExistingMetafield, ExistingMetaobject, ExistingSchema, Plan, SyncMode,
+} from './planner.js';
 import { exitCodeForPlan, planSchema } from './planner.js';
+import { attribute, repairedIdentities, type RepairItem, type RepairPlan } from './repair.js';
 
 export const DEFAULT_API_VERSION = '2026-07';
 
@@ -161,11 +164,32 @@ export class AdminClient {
       userErrors: data.metafieldDefinitionCreate.userErrors,
     }, `metafield:${definition.ownerType}:${definition.namespace}.${definition.key}`);
   }
+
+  async repairMetaobject(entry: RepairItem): Promise<void> {
+    const data = await this.request<{
+      metaobjectDefinitionUpdate: { metaobjectDefinition: { id: string } | null; userErrors: UserError[] };
+    }>(METAOBJECT_UPDATE, {
+      id: entry.item.existing?.id,
+      definition: metaobjectUpdateInput(entry),
+    }, true);
+    assertMutation(data.metaobjectDefinitionUpdate, entry.item.identity);
+  }
+
+  async repairMetafield(entry: RepairItem): Promise<void> {
+    const data = await this.request<{
+      metafieldDefinitionUpdate: { updatedDefinition: { id: string } | null; userErrors: UserError[] };
+    }>(METAFIELD_UPDATE, { definition: metafieldUpdateInput(entry) }, true);
+    assertMutation({
+      created: data.metafieldDefinitionUpdate.updatedDefinition,
+      userErrors: data.metafieldDefinitionUpdate.userErrors,
+    }, entry.item.identity);
+  }
 }
 
 export interface ApplyResult {
   plan: Plan;
   applied: string[];
+  repaired: string[];
 }
 
 export async function planStore(client: AdminClient, schema: CompiledSchema): Promise<Plan> {
@@ -176,9 +200,17 @@ export async function applyPlan(
   client: AdminClient,
   schema: CompiledSchema,
   plan: Plan,
+  repair?: RepairPlan,
 ): Promise<ApplyResult> {
   const applied: string[] = [];
+  const repaired: string[] = [];
   try {
+    // Repairs run before creates so a metaobject a new metafield references is already correct.
+    for (const entry of repair ? repairedIdentities(repair) : []) {
+      if (entry.item.kind === 'metaobject') await client.repairMetaobject(entry);
+      else await client.repairMetafield(entry);
+      repaired.push(entry.item.identity);
+    }
     for (const item of plan.items.filter((value) => value.kind === 'metaobject' && value.status === 'CREATE')) {
       await client.createMetaobject(item.desired as CanonicalMetaobject);
       applied.push(item.identity);
@@ -188,14 +220,18 @@ export async function applyPlan(
       applied.push(item.identity);
     }
   } catch (error) {
-    const landed = applied.length > 0 ? `; created before failure: ${applied.join(', ')}` : '';
-    throw new AdminError(`${error instanceof Error ? error.message : String(error)}${landed}`);
+    const landed = [
+      ...repaired.map((identity) => `repaired ${identity}`),
+      ...applied.map((identity) => `created ${identity}`),
+    ];
+    const trail = landed.length > 0 ? `; before failure: ${landed.join(', ')}` : '';
+    throw new AdminError(`${error instanceof Error ? error.message : String(error)}${trail}`);
   }
   const after = planSchema(schema, await client.readSchema(schema));
   if (exitCodeForPlan(after, 'check') !== 0) {
     throw new AdminError(`post-apply verification failed; created: ${applied.join(', ') || 'none'}`);
   }
-  return { plan: after, applied };
+  return { plan: after, applied, repaired };
 }
 
 export async function synchronize(
@@ -205,7 +241,9 @@ export async function synchronize(
 ): Promise<ApplyResult> {
   assertDescriptionLengths(schema);
   const before = await planStore(client, schema);
-  if (mode !== 'apply' || exitCodeForPlan(before, mode) !== 0) return { plan: before, applied: [] };
+  if (mode !== 'apply' || exitCodeForPlan(before, mode) !== 0) {
+    return { plan: before, applied: [], repaired: [] };
+  }
   return applyPlan(client, schema, before);
 }
 
@@ -239,17 +277,97 @@ function metafieldCreateInput(definition: CanonicalMetafield): Record<string, un
   return input;
 }
 
+// `--repair` only ever sends the attributes the plan reported as drifted, so an update never
+// carries an opinion about something the operator did not declare.
+function metafieldUpdateInput(entry: RepairItem): Record<string, unknown> {
+  const definition = entry.item.desired as CanonicalMetafield;
+  const paths = entry.repairs.map((reason) => attribute(entry.item, reason));
+  const input: Record<string, unknown> = {
+    ownerType: definition.ownerType,
+    namespace: definition.namespace,
+    key: definition.key,
+    name: definition.name,
+  };
+  if (definition.description !== undefined) input.description = definition.description;
+  if (paths.includes('validations differ')) input.validations = definition.validations;
+  if (paths.some((path) => path.startsWith('access.')) && definition.access) input.access = definition.access;
+  if (paths.some((path) => path.startsWith('capabilities.')) && definition.capabilities) {
+    input.capabilities = capabilityInput(definition.capabilities);
+  }
+  if (paths.includes('constraints differ')) {
+    input.constraintsUpdates = constraintsUpdateInput(definition, entry.item.existing as ExistingMetafield);
+  }
+  return input;
+}
+
+// Constraint values are created and deleted one by one, so the stored set has to be diffed
+// against the declared one rather than replaced.
+function constraintsUpdateInput(
+  definition: CanonicalMetafield,
+  existing: ExistingField | undefined,
+): Record<string, unknown> {
+  const stored = new Set(existing?.constraints?.values ?? []);
+  const declared = new Set(definition.constraints?.values ?? []);
+  const values = [
+    ...[...declared].filter((value) => !stored.has(value)).sort().map((value) => ({ create: value })),
+    ...[...stored].filter((value) => !declared.has(value)).sort().map((value) => ({ delete: value })),
+  ];
+  return definition.constraints ? { key: definition.constraints.key, values } : { key: null, values };
+}
+
+function metaobjectUpdateInput(entry: RepairItem): Record<string, unknown> {
+  const definition = entry.item.desired as CanonicalMetaobject;
+  const paths = entry.repairs.map((reason) => attribute(entry.item, reason));
+  const input: Record<string, unknown> = {};
+  if (paths.some((path) => path.startsWith('displayNameKey')) && definition.displayNameKey !== undefined) {
+    input.displayNameKey = definition.displayNameKey;
+  }
+  if (paths.some((path) => path.startsWith('access.')) && definition.access) input.access = definition.access;
+  if (paths.some((path) => path.startsWith('capabilities.')) && definition.capabilities) {
+    input.capabilities = capabilityInput(definition.capabilities);
+  }
+  const missing = new Set<string>();
+  const drifted = new Set<string>();
+  for (const path of paths) {
+    const added = /^fields\.([^.]+): missing$/.exec(path);
+    if (added?.[1] !== undefined) missing.add(added[1]);
+    else {
+      const changed = /^fields\.([^.]+)\./.exec(path);
+      if (changed?.[1] !== undefined) drifted.add(changed[1]);
+    }
+  }
+  const declared = new Map(definition.fields.map((field) => [field.key, field]));
+  const operations: Record<string, unknown>[] = [];
+  for (const key of [...missing].sort()) {
+    const field = declared.get(key);
+    if (field) operations.push({ create: fieldCreateInput(field) });
+  }
+  for (const key of [...drifted].sort()) {
+    const field = missing.has(key) ? undefined : declared.get(key);
+    if (field) operations.push({ update: fieldUpdateInput(field) });
+  }
+  if (operations.length > 0) input.fieldDefinitions = operations;
+  return input;
+}
+
+function fieldCreateInput(field: CanonicalField): Record<string, unknown> {
+  return { key: field.key, type: field.type, ...fieldUpdateInput(field) };
+}
+
+// No `type`: Shopify will not retype a field, and no `delete` operation is ever emitted.
+function fieldUpdateInput(field: CanonicalField): Record<string, unknown> {
+  const result: Record<string, unknown> = { key: field.key, name: field.name };
+  if (field.description !== undefined) result.description = field.description;
+  if (field.required !== undefined) result.required = field.required;
+  if (field.validations.length > 0) result.validations = field.validations;
+  return result;
+}
+
 function metaobjectCreateInput(definition: CanonicalMetaobject): Record<string, unknown> {
   const input: Record<string, unknown> = {
     type: definition.type,
     name: definition.name,
-    fieldDefinitions: definition.fields.map((field) => {
-      const result: Record<string, unknown> = { key: field.key, name: field.name, type: field.type };
-      if (field.description !== undefined) result.description = field.description;
-      if (field.required !== undefined) result.required = field.required;
-      if (field.validations.length > 0) result.validations = field.validations;
-      return result;
-    }),
+    fieldDefinitions: definition.fields.map(fieldCreateInput),
   };
   if (definition.description !== undefined) input.description = definition.description;
   if (definition.displayNameKey !== undefined) input.displayNameKey = definition.displayNameKey;
@@ -396,6 +514,24 @@ const METAFIELD_CREATE = `
 mutation CreateMetafieldDefinition($definition: MetafieldDefinitionInput!) {
   metafieldDefinitionCreate(definition: $definition) {
     createdDefinition { id }
+    userErrors { field message code }
+  }
+}`;
+
+// Neither update carries a `delete` field operation or a `type`: a repair rewrites shape the
+// operator declared and nothing else.
+const METAOBJECT_UPDATE = `
+mutation UpdateMetaobjectDefinition($id: ID!, $definition: MetaobjectDefinitionUpdateInput!) {
+  metaobjectDefinitionUpdate(id: $id, definition: $definition) {
+    metaobjectDefinition { id }
+    userErrors { field message code }
+  }
+}`;
+
+const METAFIELD_UPDATE = `
+mutation UpdateMetafieldDefinition($definition: MetafieldDefinitionUpdateInput!) {
+  metafieldDefinitionUpdate(definition: $definition) {
+    updatedDefinition { id }
     userErrors { field message code }
   }
 }`;

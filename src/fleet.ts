@@ -2,6 +2,7 @@ import { AdminError, applyPlan, planStore, type AdminClient } from './admin.js';
 import { GrantError } from './auth.js';
 import { assertDescriptionLengths } from './limits.js';
 import { exitCodeForPlan, type Plan, type SyncMode } from './planner.js';
+import { planRepair, withoutRepairs, type RepairPlan } from './repair.js';
 import type { CompiledSchema } from './schema.js';
 
 export interface StoreTarget {
@@ -17,7 +18,9 @@ export interface StoreOutcome {
   code?: string;
   reason?: string;
   plan?: Plan;
+  repair?: RepairPlan;
   applied?: string[];
+  repaired?: string[];
   refused?: string;
 }
 
@@ -28,11 +31,18 @@ export interface FleetResult {
 
 export type Connect = (store: string) => Promise<AdminClient>;
 
+export interface FleetOptions {
+  // Opt-in only, never implied by --apply: the sole way a definition is rewritten is a
+  // human typing the flag.
+  repair?: boolean;
+}
+
 export async function synchronizeFleet(
   targets: readonly StoreTarget[],
   schema: CompiledSchema,
   mode: SyncMode,
   connect: Connect,
+  options: FleetOptions = {},
 ): Promise<FleetResult> {
   assertDescriptionLengths(schema);
   const stores: StoreOutcome[] = [];
@@ -40,7 +50,9 @@ export async function synchronizeFleet(
   for (const target of targets) {
     try {
       const client = await connect(target.store);
-      const outcome = { store: target.store, status: 'planned' as const, plan: await planStore(client, schema) };
+      const plan = await planStore(client, schema);
+      const outcome: StoreOutcome & { plan: Plan } = { store: target.store, status: 'planned', plan };
+      if (options.repair) outcome.repair = planRepair(plan);
       stores.push(outcome);
       reached.push({ client, outcome });
     } catch (error) {
@@ -49,21 +61,27 @@ export async function synchronizeFleet(
     }
   }
   if (reached.length === 0) throw new AdminError('no store could be planned');
-  // Plan every store before writing to any: a conflict on one store means the declared
-  // schema and that store disagree, and creating on the rest first half-applies the fleet.
-  const blocked = reached.some(({ outcome }) => exitCodeForPlan(outcome.plan, mode) !== 0);
+  // Plan every store before writing to any: drift on one store that a repair cannot resolve
+  // means the declared schema and that store disagree, and writing to the rest half-applies
+  // the fleet.
+  const blocked = reached.some(({ outcome }) => exitCodeForPlan(outstanding(outcome), mode) !== 0);
   if (mode !== 'apply' || blocked) return { mode, stores };
   // Per store, so one store refusing a write does not stop the next.
   for (const { client, outcome } of reached) {
     try {
-      const result = await applyPlan(client, schema, outcome.plan);
+      const result = await applyPlan(client, schema, outcome.plan, outcome.repair);
       outcome.plan = result.plan;
       outcome.applied = result.applied;
+      outcome.repaired = result.repaired;
     } catch (error) {
       outcome.refused = error instanceof Error ? error.message : String(error);
     }
   }
   return { mode, stores };
+}
+
+function outstanding(outcome: StoreOutcome & { plan: Plan }): Plan {
+  return outcome.repair ? withoutRepairs(outcome.plan, outcome.repair) : outcome.plan;
 }
 
 export function fleetExitCode(result: FleetResult, mode: SyncMode): number {

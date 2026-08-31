@@ -1,7 +1,8 @@
 # @notambourine/metafields
 
 Declare merchant-owned Shopify metafield and metaobject definitions in TypeScript, inspect drift,
-and create only what is missing. The CLI never updates or deletes definitions during schema sync.
+and create only what is missing. Schema sync creates and never updates; `--repair` is the one
+opt-in that rewrites a definition, and nothing deletes one.
 
 ```ts
 import { defineSchema, field, metaobject } from '@notambourine/metafields';
@@ -54,6 +55,33 @@ organizations.
 `SHOPIFY_ADMIN_ACCESS_TOKEN` still works, and reaches one store. App credentials win when both are
 set. Minted tokens are never logged, and Shopify credential prefixes are redacted from errors.
 
+## Repair
+
+`--repair` issues the update mutations that resolve drift a plan reported as `CONFLICT`. It is
+never implied by `--apply`, so the only way a definition is rewritten is a human typing the flag.
+Without `--apply` it is a dry run that reports exactly what it would change.
+
+```sh
+metafields ./schema.ts --store example.myshopify.com --repair
+metafields ./schema.ts --store example.myshopify.com --repair --apply
+```
+
+Repairable: `required`, storefront `access`, `capabilities`, `validations`, `constraints`,
+metaobject `displayNameKey`, and a field missing from an existing metaobject.
+
+Reported and skipped, never attempted:
+
+- A `type` that differs. Shopify will not retype a definition that has stored values; that is what
+  the migration commands are for.
+- Invalid stored values (`validationStatus: SOME_INVALID`). That is data, not shape.
+- Anything `INDETERMINATE`, meaning validation is still in progress. Wait, do not write.
+
+A definition with any of those is skipped whole, so a partial update never reads like progress. It
+also keeps blocking writes to the fleet, the same as a conflict without `--repair`.
+
+Shopify refuses `required: true` on a field whose existing entries are blank. That `userErrors`
+message is surfaced intact, because the operator needs to know which entries to fill.
+
 ## Fleets
 
 `--store` repeats, and `--stores-from <file>` sweeps a list of stores, one per line, with `#`
@@ -63,8 +91,9 @@ comments:
 metafields ./schema.ts --store flagship.myshopify.com --stores-from ./stores.txt --apply
 ```
 
-- Every store is planned before any store is written to. A conflict on one store exits nonzero
-  having written nothing, because creating on the others first half-applies the fleet.
+- Every store is planned before any store is written to. Drift on one store that a repair cannot
+  resolve exits nonzero having written nothing, because writing to the others first half-applies
+  the fleet.
 - A swept store that cannot be reached is reported and does not abort the run, as long as one store
   could be planned. A swept store that has not installed the app is reported as `NOT-INSTALLED` and
   keeps the run green.
@@ -111,7 +140,8 @@ replaces an existing one and refuses to overwrite a file it did not generate. Sh
 - `--apply` creates missing metaobject definitions in dependency order, then metafield definitions.
 - `--check` exits nonzero for missing or incompatible operational shape.
 - Cosmetic name and description drift is reported but never changed.
-- Existing definitions, values, and entries are never updated or deleted by schema sync.
+- Existing definitions, values, and entries are never updated or deleted by schema sync. Only
+  `--repair` updates one, and nothing deletes a definition or a field under any flag.
 - A description over 255 characters fails `--validate` and fails sync before the first request,
   listing every offender at once. The Admin API answers `TOO_LONG`, and one create rejected
   mid-run leaves a store half-applied behind an error that reads transient.
