@@ -1,10 +1,7 @@
 name: metafield-types freshness
 
-# Two things move under this repo with no signal: Shopify adds metafield types inside a live
-# API version, and the version pinned in src/admin.ts eventually ages out of support. Neither
-# shows up in a pull request, so check on a clock. A run that finds nothing stops after the
-# check step, and one that finds something rebuilds the same branch, so daily costs a minute
-# and only narrows the window. Kept out of CI so a shopify.dev outage cannot fail someone's PR.
+# Shopify adds metafield types inside a live API version and the version pinned in src/admin.ts
+# ages out, and neither shows up in a pull request. Off CI so an outage cannot fail someone's PR.
 on:
   schedule:
     - cron: '17 6 * * *'
@@ -14,16 +11,16 @@ permissions:
   contents: read
 
 jobs:
-  refresh:
+  freshness:
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    # Reports only: an open issue outlives a red run nobody opens, and holding no ref write
+    # keeps a compromised step away from the table it is watching.
     permissions:
-      contents: write
-      pull-requests: write
+      issues: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          # The push below authenticates with GITHUB_TOKEN explicitly.
           persist-credentials: false
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
@@ -39,51 +36,60 @@ jobs:
         run: |
           npm run generate:metafield-types -- --check && CODE=0 || CODE=$?
           case "$CODE" in
-            0) echo 'stale=false' >>"$GITHUB_OUTPUT" ;;
-            1) echo 'stale=true' >>"$GITHUB_OUTPUT" ;;
-            # No pull request can fix an unreachable proxy or an aged-out version pin.
-            *) echo '::error::cannot determine freshness; see the log'; exit 1 ;;
+            0) echo 'state=fresh' >>"$GITHUB_OUTPUT" ;;
+            1) echo 'state=stale' >>"$GITHUB_OUTPUT" ;;
+            # Exit 2 is an unreachable registry or an aged-out pin, and the script cannot tell
+            # which; the issue body hands that call to a person.
+            2) echo 'state=unknown' >>"$GITHUB_OUTPUT" ;;
+            *) echo "::error::unexpected exit $CODE from the freshness check"; exit 1 ;;
           esac
 
-      - if: steps.check.outputs.stale == 'true'
-        name: Regenerate and bump
+      - if: steps.check.outputs.state != 'fresh'
+        name: Open an issue
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          STATE: ${{ steps.check.outputs.state }}
+          RUN: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
-          npm run generate:metafield-types
-          npm version patch --no-git-tag-version
+          # One open issue at a time, or the nightly re-check files a duplicate every morning.
+          if gh issue list --label metafield-drift --state open --limit 1 \
+               --json number -q '.[0].number' | grep -q .; then
+            echo 'An open metafield-drift issue already covers this.'
+            exit 0
+          fi
+          if [ "$STATE" = stale ]; then
+            TITLE='metafield-types: the generated type table is stale'
+            cat >"${RUNNER_TEMP}/body.md" <<EOF
+          \`src/metafield-types.ts\` no longer matches the metafield type list Shopify serves for
+          the pinned Admin API version.
 
-      # A GITHUB_TOKEN push triggers no workflows, so the pull request this opens gets no CI
-      # run. Gate it here instead: a new type can break the type-level tests, and that is
-      # exactly the case a person needs to see before merging.
-      - if: steps.check.outputs.stale == 'true'
-        run: npm run check
-      - if: steps.check.outputs.stale == 'true'
-        run: npm test
+          Regenerate it with \`npm run generate:metafield-types\` and ship the result with a version
+          bump. Check the diff for new types the schema builders do not handle yet; that is the
+          case this check exists to catch.
 
-      - if: steps.check.outputs.stale == 'true'
-        name: Open or update the draft pull request
+          Detected by [this run]($RUN). Closes automatically when the check next passes.
+          EOF
+          else
+            TITLE='metafield-types: cannot determine freshness'
+            cat >"${RUNNER_TEMP}/body.md" <<EOF
+          The freshness check could not read the Admin API, so drift is currently unmonitored.
+
+          Either shopify.dev was unreachable, which resolves on its own, or \`DEFAULT_API_VERSION\`
+          in \`src/admin.ts\` has aged out of support and needs a supported version pinned.
+          [The run log]($RUN) distinguishes them.
+
+          Closes automatically when the check next passes.
+          EOF
+          fi
+          gh issue create --label metafield-drift --title "$TITLE" \
+            --body-file "${RUNNER_TEMP}/body.md"
+
+      - if: steps.check.outputs.state == 'fresh'
+        name: Close a resolved issue
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          BRANCH=chore/metafield-types
-          TITLE='metafield-types: refresh from the Admin API'
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git switch -c "$BRANCH"
-          git add src/metafield-types.ts package.json package-lock.json
-          git commit -m "$TITLE"
-          # Always rebuilt from main, so the branch is force-pushed rather than appended to.
-          git push --force \
-            "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "$BRANCH"
-          if gh pr view "$BRANCH" --json state -q .state 2>/dev/null | grep -qx OPEN; then
-            echo "Updated the open pull request on $BRANCH."
-            exit 0
-          fi
-          cat >"${RUNNER_TEMP}/body.md" <<'EOF'
-          Shopify changed the metafield type list. Regenerated by
-          `.github/workflows/metafield-types.yml`; `npm run check` and `npm test` passed on this
-          commit.
-
-          Read the diff for types the schema builders do not cover yet before merging.
-          EOF
-          gh pr create --draft --base main --head "$BRANCH" --title "$TITLE" \
-            --body-file "${RUNNER_TEMP}/body.md"
+          # Self-healing, so a one-night shopify.dev outage does not leave an issue open.
+          for N in $(gh issue list --label metafield-drift --state open --json number -q '.[].number'); do
+            gh issue close "$N" --comment 'The generated type table matches the Admin API again.'
+          done
