@@ -23,7 +23,7 @@ function listValue(value: string): string[] | null {
   }
 }
 
-export function toStoreValidations(
+function toStoreValidations(
   validations: readonly Validation[],
   idByType: ReadonlyMap<string, string>,
 ): Validation[] {
@@ -36,6 +36,22 @@ export function toStoreValidations(
     const types = listValue(validation.value) ?? [];
     return { name, value: JSON.stringify(types.map((type) => definitionId(type, idByType))) };
   });
+}
+
+// Whole definitions are translated once at the client boundary, so the GraphQL input builders
+// stay a plain projection of the canonical shape.
+export function toStoreField<T extends { validations: readonly Validation[] }>(
+  definition: T,
+  idByType: ReadonlyMap<string, string>,
+): T {
+  return { ...definition, validations: toStoreValidations(definition.validations, idByType) };
+}
+
+export function toStoreMetaobject<T extends { fields: readonly { validations: readonly Validation[] }[] }>(
+  definition: T,
+  idByType: ReadonlyMap<string, string>,
+): T {
+  return { ...definition, fields: definition.fields.map((field) => toStoreField(field, idByType)) };
 }
 
 export function toPortableValidations(

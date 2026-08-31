@@ -11,7 +11,7 @@ import { exitCodeForPlan, planFrom, planSchema } from './planner.js';
 import {
   changedPaths, classifyDrift, deferred, written, type DriftItem, type DriftPlan,
 } from './changes.js';
-import { toPortableValidations, toStoreValidations } from './references.js';
+import { toPortableValidations, toStoreField, toStoreMetaobject } from './references.js';
 
 export const DEFAULT_API_VERSION = '2026-07';
 
@@ -187,13 +187,22 @@ export class AdminClient {
     return { ...field, validations: toPortableValidations(field.validations, this.#typeById) };
   }
 
+  // References are resolved before the input builders run, so those stay a plain projection.
+  // Every referenced metaobject was read or created by now: creates precede updates.
+  #resolved(entry: DriftItem): DriftItem {
+    const desired = entry.item.kind === 'metaobject'
+      ? toStoreMetaobject(entry.item.desired as CanonicalMetaobject, this.#idByType)
+      : toStoreField(entry.item.desired as CanonicalMetafield, this.#idByType);
+    return { ...entry, item: { ...entry.item, desired } };
+  }
+
   async createMetaobject(definition: CanonicalMetaobject): Promise<void> {
     const data = await this.request<{
       metaobjectDefinitionCreate: {
         metaobjectDefinition: { id: string; type: string } | null;
         userErrors: UserError[];
       };
-    }>(METAOBJECT_CREATE, { definition: metaobjectCreateInput(definition, this.#idByType) }, true);
+    }>(METAOBJECT_CREATE, { definition: metaobjectCreateInput(toStoreMetaobject(definition, this.#idByType)) }, true);
     const payload = data.metaobjectDefinitionCreate;
     assertMutation(payload.metaobjectDefinition, payload.userErrors, `metaobject:${definition.type}`);
     // Metafields referencing this metaobject are created later in the same run, by type.
@@ -203,7 +212,7 @@ export class AdminClient {
   async createMetafield(definition: CanonicalMetafield): Promise<void> {
     const data = await this.request<{
       metafieldDefinitionCreate: { createdDefinition: { id: string } | null; userErrors: UserError[] };
-    }>(METAFIELD_CREATE, { definition: metafieldCreateInput(definition, this.#idByType) }, true);
+    }>(METAFIELD_CREATE, { definition: metafieldCreateInput(toStoreField(definition, this.#idByType)) }, true);
     const payload = data.metafieldDefinitionCreate;
     assertMutation(payload.createdDefinition, payload.userErrors,
       `metafield:${definition.ownerType}:${definition.namespace}.${definition.key}`);
@@ -214,7 +223,7 @@ export class AdminClient {
       metaobjectDefinitionUpdate: { metaobjectDefinition: { id: string } | null; userErrors: UserError[] };
     }>(METAOBJECT_UPDATE, {
       id: entry.item.existing?.id,
-      definition: metaobjectUpdateInput(entry, force, this.#idByType),
+      definition: metaobjectUpdateInput(this.#resolved(entry), force),
     }, true);
     const payload = data.metaobjectDefinitionUpdate;
     assertMutation(payload.metaobjectDefinition, payload.userErrors, entry.item.identity);
@@ -223,7 +232,7 @@ export class AdminClient {
   async updateMetafield(entry: DriftItem, force = false): Promise<void> {
     const data = await this.request<{
       metafieldDefinitionUpdate: { updatedDefinition: { id: string } | null; userErrors: UserError[] };
-    }>(METAFIELD_UPDATE, { definition: metafieldUpdateInput(entry, force, this.#idByType) }, true);
+    }>(METAFIELD_UPDATE, { definition: metafieldUpdateInput(this.#resolved(entry), force) }, true);
     const payload = data.metafieldDefinitionUpdate;
     assertMutation(payload.updatedDefinition, payload.userErrors, entry.item.identity);
   }
@@ -314,10 +323,7 @@ function assertMutation(definition: unknown, userErrors: UserError[], identity: 
   }
 }
 
-function metafieldCreateInput(
-  definition: CanonicalMetafield,
-  idByType: ReadonlyMap<string, string>,
-): Record<string, unknown> {
+function metafieldCreateInput(definition: CanonicalMetafield): Record<string, unknown> {
   const input: Record<string, unknown> = {
     name: definition.name,
     namespace: definition.namespace,
@@ -326,9 +332,7 @@ function metafieldCreateInput(
     type: definition.type,
   };
   if (definition.description !== undefined) input.description = definition.description;
-  if (definition.validations.length > 0) {
-    input.validations = toStoreValidations(definition.validations, idByType);
-  }
+  if (definition.validations.length > 0) input.validations = definition.validations;
   if (definition.access) input.access = definition.access;
   if (definition.capabilities) input.capabilities = capabilityInput(definition.capabilities);
   if (definition.constraints) input.constraints = definition.constraints;
@@ -337,11 +341,7 @@ function metafieldCreateInput(
 
 // An update only ever sends the attributes the plan reported as drifted, so it never carries an
 // opinion about something the operator did not declare.
-function metafieldUpdateInput(
-  entry: DriftItem,
-  force: boolean,
-  idByType: ReadonlyMap<string, string>,
-): Record<string, unknown> {
+function metafieldUpdateInput(entry: DriftItem, force: boolean): Record<string, unknown> {
   const definition = entry.item.desired as CanonicalMetafield;
   const paths = changedPaths(entry, force);
   const input: Record<string, unknown> = {
@@ -350,9 +350,7 @@ function metafieldUpdateInput(
     key: definition.key,
   };
   addLabels(input, paths, definition);
-  if (paths.includes('validations differ')) {
-    input.validations = toStoreValidations(definition.validations, idByType);
-  }
+  if (paths.includes('validations differ')) input.validations = definition.validations;
   if (paths.some((path) => path.startsWith('access.')) && definition.access) input.access = definition.access;
   if (paths.some((path) => path.startsWith('capabilities.')) && definition.capabilities) {
     input.capabilities = capabilityInput(definition.capabilities);
@@ -378,11 +376,7 @@ function constraintsUpdateInput(
   return definition.constraints ? { key: definition.constraints.key, values } : { key: null, values };
 }
 
-function metaobjectUpdateInput(
-  entry: DriftItem,
-  force: boolean,
-  idByType: ReadonlyMap<string, string>,
-): Record<string, unknown> {
+function metaobjectUpdateInput(entry: DriftItem, force: boolean): Record<string, unknown> {
   const definition = entry.item.desired as CanonicalMetaobject;
   const paths = changedPaths(entry, force);
   const input: Record<string, unknown> = {};
@@ -408,11 +402,11 @@ function metaobjectUpdateInput(
   const operations: Record<string, unknown>[] = [];
   for (const key of [...missing].sort()) {
     const field = declared.get(key);
-    if (field) operations.push({ create: fieldCreateInput(field, idByType) });
+    if (field) operations.push({ create: fieldCreateInput(field) });
   }
   for (const key of [...drifted].sort()) {
     const field = missing.has(key) ? undefined : declared.get(key);
-    if (field) operations.push({ update: fieldUpdateInput(field, idByType) });
+    if (field) operations.push({ update: fieldUpdateInput(field) });
   }
   if (operations.length > 0) input.fieldDefinitions = operations;
   return input;
@@ -431,33 +425,24 @@ function addLabels(
   }
 }
 
-function fieldCreateInput(
-  field: CanonicalField,
-  idByType: ReadonlyMap<string, string>,
-): Record<string, unknown> {
-  return { key: field.key, type: field.type, ...fieldUpdateInput(field, idByType) };
+function fieldCreateInput(field: CanonicalField): Record<string, unknown> {
+  return { key: field.key, type: field.type, ...fieldUpdateInput(field) };
 }
 
 // No `type`: Shopify will not retype a field, and no `delete` operation is ever emitted.
-function fieldUpdateInput(
-  field: CanonicalField,
-  idByType: ReadonlyMap<string, string>,
-): Record<string, unknown> {
+function fieldUpdateInput(field: CanonicalField): Record<string, unknown> {
   const result: Record<string, unknown> = { key: field.key, name: field.name };
   if (field.description !== undefined) result.description = field.description;
   if (field.required !== undefined) result.required = field.required;
-  if (field.validations.length > 0) result.validations = toStoreValidations(field.validations, idByType);
+  if (field.validations.length > 0) result.validations = field.validations;
   return result;
 }
 
-function metaobjectCreateInput(
-  definition: CanonicalMetaobject,
-  idByType: ReadonlyMap<string, string>,
-): Record<string, unknown> {
+function metaobjectCreateInput(definition: CanonicalMetaobject): Record<string, unknown> {
   const input: Record<string, unknown> = {
     type: definition.type,
     name: definition.name,
-    fieldDefinitions: definition.fields.map((field) => fieldCreateInput(field, idByType)),
+    fieldDefinitions: definition.fields.map(fieldCreateInput),
   };
   if (definition.description !== undefined) input.description = definition.description;
   if (definition.displayNameKey !== undefined) input.displayNameKey = definition.displayNameKey;
