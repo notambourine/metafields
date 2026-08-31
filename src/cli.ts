@@ -253,16 +253,18 @@ function connectorFrom(args: Arguments, storeCount: number): Connect {
       token: await mintAccessToken({ store, clientId, clientSecret }),
     });
   }
+  // Incomplete app credentials fall back rather than fail: a stray SHOPIFY_APP_CLIENT_ID in a
+  // CI image must not break a command a static token can serve on its own.
+  if (token.length > 0 && storeCount === 1) {
+    return async (store) => new AdminClient({ store, token, apiVersion });
+  }
   if (clientId.length > 0 || clientSecret.length > 0) {
     throw new Error('app auth needs both --client-id (or SHOPIFY_APP_CLIENT_ID) and SHOPIFY_APP_SECRET');
   }
   if (token.length === 0) {
     throw new Error('set SHOPIFY_ADMIN_ACCESS_TOKEN, or SHOPIFY_APP_CLIENT_ID and SHOPIFY_APP_SECRET');
   }
-  if (storeCount > 1) {
-    throw new Error('SHOPIFY_ADMIN_ACCESS_TOKEN reaches one store; a fleet needs SHOPIFY_APP_CLIENT_ID and SHOPIFY_APP_SECRET');
-  }
-  return async (store) => new AdminClient({ store, token, apiVersion });
+  throw new Error('SHOPIFY_ADMIN_ACCESS_TOKEN reaches one store; a fleet needs SHOPIFY_APP_CLIENT_ID and SHOPIFY_APP_SECRET');
 }
 
 async function clientFrom(args: Arguments): Promise<AdminClient> {
