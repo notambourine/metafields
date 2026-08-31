@@ -253,15 +253,16 @@ export async function applyPlan(
   const updated: string[] = [];
   const skipped = deferred(drift, force).map((entry) => entry.item.identity);
   try {
-    // Updates run before creates so a metaobject a new metafield references is already correct.
+    // Metaobject creates run first so an update can reference a metaobject born this run; updates
+    // still precede metafield creates so a new metafield lands against already-corrected shape.
+    for (const item of plan.items.filter((value) => value.kind === 'metaobject' && value.status === 'CREATE')) {
+      await client.createMetaobject(item.desired as CanonicalMetaobject);
+      created.push(item.identity);
+    }
     for (const entry of written(drift, force)) {
       if (entry.item.kind === 'metaobject') await client.updateMetaobject(entry, force);
       else await client.updateMetafield(entry, force);
       updated.push(entry.item.identity);
-    }
-    for (const item of plan.items.filter((value) => value.kind === 'metaobject' && value.status === 'CREATE')) {
-      await client.createMetaobject(item.desired as CanonicalMetaobject);
-      created.push(item.identity);
     }
     for (const item of plan.items.filter((value) => value.kind === 'metafield' && value.status === 'CREATE')) {
       await client.createMetafield(item.desired as CanonicalMetafield);
