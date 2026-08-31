@@ -44,6 +44,61 @@ test('metafield reads select by identifier, the only selector that is not deprec
   });
 });
 
+function throttled(): Response {
+  return response({ errors: [{ message: 'Throttled', extensions: { code: 'THROTTLED' } }] });
+}
+
+// The escape this closes: a rate limit is an HTTP 200, so it never reaches the status checks.
+test('a throttle carrying HTTP 200 is retried, and an over-cost query is not', async () => {
+  const attempts: string[] = [];
+  const client = new AdminClient({
+    store: 'example.myshopify.com', token: 'shpat_x', retries: 1,
+    fetch: async (_input, init) => {
+      const { query } = JSON.parse(String(init?.body)) as { query: string };
+      attempts.push(query);
+      if (query.includes('overCost')) {
+        return response({
+          errors: [{
+            message: 'Query cost is 2003, which exceeds the single query max cost limit (1000).',
+            extensions: { code: 'MAX_COST_EXCEEDED' },
+          }],
+        });
+      }
+      return attempts.length === 1 ? throttled() : response({ data: { shop: { id: '1' } } });
+    },
+  });
+  assert.deepEqual(await client.request('query { shop { id } }'), { shop: { id: '1' } });
+  assert.equal(attempts.length, 2);
+  await assert.rejects(client.request('query { overCost }'), /exceeds the single query max cost/);
+  assert.equal(attempts.length, 3);
+});
+
+// A throttle rejects the mutation before it runs, so a retry cannot leave a second definition.
+// A 500 might already have created one, so it is still sent exactly once.
+test('a throttled mutation is retried; a mutation that may have landed is not', async () => {
+  let attempts = 0;
+  const client = new AdminClient({
+    store: 'example.myshopify.com', token: 'shpat_x', retries: 2,
+    fetch: async () => {
+      attempts += 1;
+      return attempts < 3 ? throttled() : response({ data: { ok: true } });
+    },
+  });
+  assert.deepEqual(await client.request('mutation { ok }', {}, true), { ok: true });
+  assert.equal(attempts, 3);
+
+  let serverErrors = 0;
+  const failing = new AdminClient({
+    store: 'example.myshopify.com', token: 'shpat_x', retries: 2,
+    fetch: async () => {
+      serverErrors += 1;
+      return response({}, 500);
+    },
+  });
+  await assert.rejects(failing.request('mutation { ok }', {}, true), /HTTP 500/);
+  assert.equal(serverErrors, 1);
+});
+
 test('apply creates metaobjects before metafields and verifies afterward', async () => {
   const desired = compileSchema(defineSchema({
     metaobjects: { faq: metaobject({ name: 'FAQ', fields: { title: field.string() } }) },
@@ -64,5 +119,5 @@ test('apply creates metaobjects before metafields and verifies afterward', async
   };
   const result = await synchronize(fake as never, desired, 'apply');
   assert.deepEqual(calls, ['metaobjectDefinitionCreate', 'metafieldDefinitionCreate']);
-  assert.deepEqual(result.applied, ['metaobject:faq', 'metafield:PRODUCT:custom.faq_ref']);
+  assert.deepEqual(result.created, ['metaobject:faq', 'metafield:PRODUCT:custom.faq_ref']);
 });

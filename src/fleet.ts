@@ -2,7 +2,7 @@ import { AdminError, applyPlan, planStore, type AdminClient } from './admin.js';
 import { GrantError } from './auth.js';
 import { assertDescriptionLengths } from './limits.js';
 import { exitCodeForPlan, type Plan, type SyncMode } from './planner.js';
-import { planRepair, withoutRepairs, type RepairPlan } from './repair.js';
+import { classifyDrift, deferred, type DriftPlan } from './changes.js';
 import type { CompiledSchema } from './schema.js';
 
 export interface StoreTarget {
@@ -18,9 +18,10 @@ export interface StoreOutcome {
   code?: string;
   reason?: string;
   plan?: Plan;
-  repair?: RepairPlan;
-  applied?: string[];
-  repaired?: string[];
+  drift?: DriftPlan;
+  created?: string[];
+  updated?: string[];
+  skipped?: string[];
   refused?: string;
 }
 
@@ -32,9 +33,9 @@ export interface FleetResult {
 export type Connect = (store: string) => Promise<AdminClient>;
 
 export interface FleetOptions {
-  // Opt-in only, never implied by --apply: the sole way a definition is rewritten is a
-  // human typing the flag.
-  repair?: boolean;
+  // Overrides the tool's own judgment about which updates can break something live. It never
+  // overrides a Shopify constraint and never overrides a data problem.
+  force?: boolean;
 }
 
 export async function synchronizeFleet(
@@ -45,14 +46,21 @@ export async function synchronizeFleet(
   options: FleetOptions = {},
 ): Promise<FleetResult> {
   assertDescriptionLengths(schema);
+  const force = options.force ?? false;
   const stores: StoreOutcome[] = [];
-  const reached: { client: AdminClient; outcome: StoreOutcome & { plan: Plan } }[] = [];
+  const reached: { client: AdminClient; outcome: StoreOutcome & { plan: Plan; drift: DriftPlan } }[] = [];
   for (const target of targets) {
     try {
       const client = await connect(target.store);
       const plan = await planStore(client, schema);
-      const outcome: StoreOutcome & { plan: Plan } = { store: target.store, status: 'planned', plan };
-      if (options.repair) outcome.repair = planRepair(plan);
+      const drift = classifyDrift(plan);
+      const outcome: StoreOutcome & { plan: Plan; drift: DriftPlan } = {
+        store: target.store,
+        status: 'planned',
+        plan,
+        drift,
+        skipped: deferred(drift, force).map((entry) => entry.item.identity),
+      };
       stores.push(outcome);
       reached.push({ client, outcome });
     } catch (error) {
@@ -61,18 +69,17 @@ export async function synchronizeFleet(
     }
   }
   if (reached.length === 0) throw new AdminError('no store could be planned');
-  // Plan every store before writing to any: drift on one store that a repair cannot resolve
-  // means the declared schema and that store disagree, and writing to the rest half-applies
-  // the fleet.
-  const blocked = reached.some(({ outcome }) => exitCodeForPlan(outstanding(outcome), mode) !== 0);
-  if (mode !== 'apply' || blocked) return { mode, stores };
-  // Per store, so one store refusing a write does not stop the next.
+  if (mode !== 'apply') return { mode, stores };
+  // No cross-store block: every store applies the same set and skips the same definitions, so
+  // the fleet stays uniform on its own, which was the only thing the block bought. Per store,
+  // so one store refusing a write does not stop the next.
   for (const { client, outcome } of reached) {
     try {
-      const result = await applyPlan(client, schema, outcome.plan, outcome.repair);
+      const result = await applyPlan(client, schema, outcome.plan, outcome.drift, force);
       outcome.plan = result.plan;
-      outcome.applied = result.applied;
-      outcome.repaired = result.repaired;
+      outcome.created = result.created;
+      outcome.updated = result.updated;
+      outcome.skipped = result.skipped;
     } catch (error) {
       outcome.refused = error instanceof Error ? error.message : String(error);
     }
@@ -80,16 +87,12 @@ export async function synchronizeFleet(
   return { mode, stores };
 }
 
-function outstanding(outcome: StoreOutcome & { plan: Plan }): Plan {
-  return outcome.repair ? withoutRepairs(outcome.plan, outcome.repair) : outcome.plan;
-}
-
-export function fleetExitCode(result: FleetResult, mode: SyncMode): number {
+export function fleetExitCode(result: FleetResult): number {
   let code = 0;
   for (const outcome of result.stores) {
     // A store that has simply not installed the app is not a failure; a fleet sweep stays green.
     if (outcome.status === 'unreachable' || outcome.refused !== undefined) code = Math.max(code, 2);
-    else if (outcome.plan) code = Math.max(code, exitCodeForPlan(outcome.plan, mode));
+    else if (outcome.plan) code = Math.max(code, exitCodeForPlan(outcome.plan));
   }
   return code;
 }

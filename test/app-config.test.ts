@@ -1,0 +1,79 @@
+import assert from 'node:assert/strict';
+import { execFile } from 'node:child_process';
+import { mkdtemp, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { promisify } from 'node:util';
+import test from 'node:test';
+import { readAppConfig } from '../dist/index.js';
+
+const execFileAsync = promisify(execFile);
+
+async function toml(content: string): Promise<string> {
+  const directory = await mkdtemp(join(tmpdir(), 'metafields-app-'));
+  const path = join(directory, 'shopify.app.toml');
+  await writeFile(path, content);
+  return path;
+}
+
+test('readAppConfig takes client_id from the top-level table', async () => {
+  const path = await toml([
+    '# Learn more at https://shopify.dev',
+    'client_id = "0123456789abcdef0123456789abcdef"',
+    'name = "storefront-data"',
+    'application_url = "https://example.com"',
+    '',
+    '[access_scopes]',
+    'scopes = "write_products"',
+  ].join('\n'));
+  assert.deepEqual(await readAppConfig(path), { clientId: '0123456789abcdef0123456789abcdef' });
+});
+
+// A `[webhooks]` or `[build]` section may carry its own client_id; only the app's own counts.
+test('readAppConfig never reads a client_id out of a section', async () => {
+  const path = await toml(['name = "app"', '[build]', 'client_id = "wrong"'].join('\n'));
+  await assert.rejects(readAppConfig(path), /no top-level client_id/);
+});
+
+test('readAppConfig ignores a commented-out client_id', async () => {
+  const path = await toml(['# client_id = "commented"', 'name = "app" # client_id = "trailing"'].join('\n'));
+  await assert.rejects(readAppConfig(path), /no top-level client_id/);
+});
+
+test('readAppConfig refuses a client_id that is not a quoted string', async () => {
+  const path = await toml('client_id = 12345\n');
+  await assert.rejects(readAppConfig(path), /must be a non-empty quoted string/);
+});
+
+test('readAppConfig reports a missing file by path', async () => {
+  await assert.rejects(readAppConfig(join(tmpdir(), 'metafields-absent.toml')), /could not read/);
+});
+
+// Every case here stops in the connector, before a request, so the stderr line names which
+// credential the CLI believes it has.
+async function authError(options: string[], env: Record<string, string> = {}): Promise<string> {
+  const argv = ['./dist/cli.js', './test/fixture-schema.ts', '--store', 'example.myshopify.com', ...options];
+  try {
+    return (await execFileAsync(process.execPath, argv, { env: { PATH: process.env.PATH ?? '', ...env } })).stderr;
+  } catch (error) {
+    return String((error as { stderr?: string }).stderr ?? error);
+  }
+}
+
+test('--app-config supplies the client id an app grant needs', async () => {
+  const path = await toml('client_id = "from-toml"\n');
+  // Without it the CLI has no client id at all and reports the other credential instead.
+  assert.match(await authError([]), /set SHOPIFY_ADMIN_ACCESS_TOKEN/);
+  assert.match(await authError(['--app-config', path]), /app auth needs both/);
+});
+
+test('--client-id wins over --app-config, which wins over SHOPIFY_APP_CLIENT_ID', async () => {
+  const unreadable = join(tmpdir(), 'metafields-absent.toml');
+  // A path never read cannot fail the run.
+  assert.match(await authError(['--app-config', unreadable, '--client-id', 'x']), /app auth needs both/);
+  assert.match(await authError(['--app-config', unreadable]), /could not read/);
+  assert.match(
+    await authError(['--app-config', unreadable], { SHOPIFY_APP_CLIENT_ID: 'from-env' }),
+    /could not read/,
+  );
+});

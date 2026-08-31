@@ -43,7 +43,7 @@ export interface ExistingSchema {
 
 export type PlanStatus = 'CREATE' | 'PRESENT' | 'CONFLICT' | 'INDETERMINATE';
 
-export type SyncMode = 'dry-run' | 'check' | 'apply';
+export type SyncMode = 'dry-run' | 'apply';
 
 export interface PlanItem {
   kind: 'metaobject' | 'metafield';
@@ -52,8 +52,8 @@ export interface PlanItem {
   reasons: string[];
   notices: string[];
   desired: CanonicalMetaobject | CanonicalMetafield;
-  // What the store has today. `--repair` needs the metaobject id to update against and the
-  // stored constraint values to delete, neither of which a reason string can carry.
+  // What the store has today. An update needs the metaobject id to write against and the
+  // stored constraint values to diff, neither of which a reason string can carry.
   existing?: ExistingMetaobject | ExistingMetafield;
 }
 
@@ -240,8 +240,11 @@ export function planFrom(items: PlanItem[]): Plan {
   };
 }
 
-export function exitCodeForPlan(plan: Plan, mode: SyncMode): number {
+// The code describes the store, not the flags: any real drift left standing is nonzero in every
+// mode, so appending --dry-run to the command CI runs gates on the same answer. Cosmetic notices
+// are not drift and never reach it.
+export function exitCodeForPlan(plan: Plan): number {
   if (plan.indeterminate > 0) return 2;
-  if (plan.conflicts > 0 || (mode === 'check' && plan.creates > 0)) return 1;
+  if (plan.conflicts > 0 || plan.creates > 0) return 1;
   return 0;
 }

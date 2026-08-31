@@ -59,7 +59,9 @@ function targets(...stores: [string, boolean][]): StoreTarget[] {
   return stores.map(([store, explicit]) => ({ store, explicit }));
 }
 
-test('a conflict on one store writes to no store in the fleet', async () => {
+// The cross-store block is gone: every store applies the same set and skips the same
+// definitions, so the fleet stays uniform without withholding the creates one store can take.
+test('a conflict nothing can resolve on one store still lets the rest of the fleet create', async () => {
   const { connect, created } = fleet({
     'a.myshopify.com': { metafields: [] },
     'b.myshopify.com': { metafields: [{ ...PRESENT, type: 'url' }] },
@@ -67,9 +69,11 @@ test('a conflict on one store writes to no store in the fleet', async () => {
   const result = await synchronizeFleet(
     targets(['a.myshopify.com', true], ['b.myshopify.com', true]), schema(), 'apply', connect,
   );
-  assert.deepEqual(created, []);
-  assert.equal(fleetExitCode(result, 'apply'), 1);
-  assert.deepEqual(result.stores.map((item) => item.applied), [undefined, undefined]);
+  assert.deepEqual(created, ['a.myshopify.com']);
+  assert.deepEqual(result.stores.map((item) => item.skipped), [
+    [], ['metafield:PRODUCT:custom.promo_text'],
+  ]);
+  assert.equal(fleetExitCode(result), 1);
 });
 
 test('a swept store that has not installed the app is reported, not failed', async () => {
@@ -82,7 +86,7 @@ test('a swept store that has not installed the app is reported, not failed', asy
     result.stores.map((item) => [item.store, item.status]),
     [['a.myshopify.com', 'planned'], ['b.myshopify.com', 'not-installed']],
   );
-  assert.equal(fleetExitCode(result, 'apply'), 0);
+  assert.equal(fleetExitCode(result), 0);
 });
 
 test('a store named on the command line never fails quietly', async () => {
@@ -103,7 +107,7 @@ test('a swept store that cannot be reached exits 2 even when every reached store
   );
   assert.equal(result.stores[1]?.status, 'unreachable');
   assert.equal(result.stores[1]?.code, 'shop_not_permitted');
-  assert.equal(fleetExitCode(result, 'apply'), 2);
+  assert.equal(fleetExitCode(result), 2);
 });
 
 test('one store refusing a write does not stop the next, and every refusal is collected', async () => {
@@ -118,7 +122,7 @@ test('one store refusing a write does not stop the next, and every refusal is co
   );
   assert.deepEqual(created, ['b.myshopify.com']);
   assert.deepEqual(result.stores.map((item) => item.refused?.split(':').pop()?.trim()), ['taken', undefined, 'locked']);
-  assert.equal(fleetExitCode(result, 'apply'), 2);
+  assert.equal(fleetExitCode(result), 2);
 });
 
 test('every over-long description is listed at once, before the first socket', async () => {
