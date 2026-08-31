@@ -105,15 +105,11 @@ async function syncCommand(args: Arguments): Promise<number> {
 async function pullCommand(args: Arguments): Promise<number> {
   if (args.positional.length > 0) throw new Error('pull accepts no positional arguments');
   const allOwners = args.flags.has('all-owners');
-  const ownerValues = values(args, 'owner');
-  if (allOwners && ownerValues.length > 0) throw new Error('--all-owners and --owner are mutually exclusive');
-  if (!allOwners && ownerValues.length === 0) throw new Error('pull requires --owner or --all-owners');
+  const ownerValues = requireExactlyOne(args, 'owner', 'all-owners');
   const owners = (allOwners ? Object.keys(OWNER_TYPES) : ownerValues) as Owner[];
   for (const owner of owners) if (!(owner in OWNER_TYPES)) throw new Error(`unsupported owner: ${owner}`);
   const allNamespaces = args.flags.has('all-namespaces');
-  const namespaces = values(args, 'namespace');
-  if (allNamespaces && namespaces.length > 0) throw new Error('--all-namespaces and --namespace are mutually exclusive');
-  if (!allNamespaces && namespaces.length === 0) throw new Error('pull requires --namespace or --all-namespaces');
+  const namespaces = requireExactlyOne(args, 'namespace', 'all-namespaces');
   const pulled = await pullSchema(await clientFrom(args), {
     owners,
     namespaces,
@@ -121,18 +117,12 @@ async function pullCommand(args: Arguments): Promise<number> {
     metaobjects: args.flags.has('metaobjects'),
   });
   const generated = generateSchemaModule(pulled);
-  const out = oneValue(args, 'out', false);
-  if (out) {
-    const handle = await open(resolve(process.cwd(), out), 'wx');
-    await handle.writeFile(generated);
-    await handle.close();
-    output(args, { status: 'written', out, excluded: pulled.excluded }, `WROTE ${out}\n`);
-  } else if (args.flags.has('json')) {
-    output(args, { schema: generated, excluded: pulled.excluded }, '');
-  } else {
-    process.stdout.write(generated);
-    for (const identity of pulled.excluded) process.stderr.write(`EXCLUDED ${identity}\n`);
-  }
+  await deliver(args, {
+    key: 'schema',
+    value: generated,
+    text: generated,
+    notes: { key: 'excluded', identities: pulled.excluded },
+  });
   return 0;
 }
 
@@ -143,16 +133,7 @@ async function compileCommand(args: Arguments): Promise<number> {
   if (isRecord(value) && value.__kind === SCHEMA_MARKER) compiled = compileSchema(value);
   else if (isRecord(value) && value.__kind === MIGRATION_MARKER) compiled = compileMigration(value);
   else throw new Error('default export is neither a schema nor a migration declaration');
-  const text = stringifyCanonical(compiled);
-  const out = oneValue(args, 'out', false);
-  if (out) {
-    const handle = await open(resolve(process.cwd(), out), 'wx');
-    await handle.writeFile(text);
-    await handle.close();
-    process.stdout.write(`WROTE ${out}\n`);
-  } else {
-    process.stdout.write(text);
-  }
+  await deliver(args, { key: 'compiled', value: compiled, text: stringifyCanonical(compiled) });
   return 0;
 }
 
@@ -160,18 +141,17 @@ async function emitCommand(args: Arguments): Promise<number> {
   const path = onlyPositional(args, 'schema module');
   if (!args.flags.has('liquid')) throw new Error('emit requires an output format: --liquid');
   const { definitions, skipped } = emitLiquidMetafields(await loadSchema(path));
-  const text = stringifyCanonical(definitions);
   const out = oneValue(args, 'out', false);
-  if (!out) {
-    process.stdout.write(text);
-    for (const identity of skipped) process.stderr.write(`SKIPPED ${identity}\n`);
-    return 0;
+  if (out !== undefined) {
+    await assertGeneratedTarget(resolve(process.cwd(), out), args.flags.has('force'));
   }
-  const target = resolve(process.cwd(), out);
-  await assertGeneratedTarget(target, args.flags.has('force'));
-  await mkdir(dirname(target), { recursive: true });
-  await writeFile(target, text);
-  output(args, { status: 'written', out, skipped }, `WROTE ${out}\n`);
+  await deliver(args, {
+    key: 'definitions',
+    value: definitions,
+    text: stringifyCanonical(definitions),
+    notes: { key: 'skipped', identities: skipped },
+    overwrite: true,
+  });
   return 0;
 }
 
@@ -308,6 +288,55 @@ async function clientFrom(args: Arguments): Promise<AdminClient> {
 
 function values(args: Arguments, name: string): string[] {
   return args.values.get(name) ?? [];
+}
+
+// emit regenerates an editor cache in place; pull and compile refuse to clobber anything.
+async function writeOut(out: string, text: string, overwrite = false): Promise<void> {
+  const path = resolve(process.cwd(), out);
+  if (!overwrite) {
+    const handle = await open(path, 'wx');
+    await handle.writeFile(text);
+    await handle.close();
+    return;
+  }
+  await mkdir(dirname(path), { recursive: true });
+  await writeFile(path, text);
+}
+
+// Every command that produces a document delivers it the same way, so one --json shape parses
+// them all. Left-out identities join the object, or reach stderr to keep stdout pipeable.
+interface Delivery {
+  key: string;
+  value: unknown;
+  text: string;
+  notes?: { key: string; identities: readonly string[] };
+  overwrite?: boolean;
+}
+
+async function deliver(args: Arguments, delivery: Delivery): Promise<void> {
+  const notes = delivery.notes ? { [delivery.notes.key]: delivery.notes.identities } : {};
+  const out = oneValue(args, 'out', false);
+  if (out !== undefined) {
+    await writeOut(out, delivery.text, delivery.overwrite);
+    output(args, { status: 'written', out, ...notes }, `WROTE ${out}\n`);
+    return;
+  }
+  if (args.flags.has('json')) {
+    output(args, { [delivery.key]: delivery.value, ...notes }, '');
+    return;
+  }
+  process.stdout.write(delivery.text);
+  for (const identity of delivery.notes?.identities ?? []) {
+    process.stderr.write(`${delivery.notes?.key.toUpperCase()} ${identity}\n`);
+  }
+}
+
+function requireExactlyOne(args: Arguments, name: string, allFlag: string): string[] {
+  const selected = values(args, name);
+  const all = args.flags.has(allFlag);
+  if (all && selected.length > 0) throw new Error(`--${allFlag} and --${name} are mutually exclusive`);
+  if (!all && selected.length === 0) throw new Error(`${args.command} requires --${name} or --${allFlag}`);
+  return selected;
 }
 
 function oneValue(args: Arguments, name: string, required: true): string;

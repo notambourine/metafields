@@ -1,3 +1,7 @@
+import {
+  mapMetafield, mapMetaobject, METAFIELD_SELECTION, METAOBJECT_SELECTION,
+  type RawMetafield, type RawMetaobject,
+} from './admin-shapes.js';
 import { assertDescriptionLengths } from './limits.js';
 import type { CanonicalField, CanonicalMetafield, CanonicalMetaobject, CompiledSchema } from './schema.js';
 import type {
@@ -167,17 +171,17 @@ export class AdminClient {
     const data = await this.request<{
       metaobjectDefinitionCreate: { metaobjectDefinition: { id: string } | null; userErrors: UserError[] };
     }>(METAOBJECT_CREATE, { definition: metaobjectCreateInput(definition) }, true);
-    assertMutation(data.metaobjectDefinitionCreate, `metaobject:${definition.type}`);
+    const payload = data.metaobjectDefinitionCreate;
+    assertMutation(payload.metaobjectDefinition, payload.userErrors, `metaobject:${definition.type}`);
   }
 
   async createMetafield(definition: CanonicalMetafield): Promise<void> {
     const data = await this.request<{
       metafieldDefinitionCreate: { createdDefinition: { id: string } | null; userErrors: UserError[] };
     }>(METAFIELD_CREATE, { definition: metafieldCreateInput(definition) }, true);
-    assertMutation({
-      created: data.metafieldDefinitionCreate.createdDefinition,
-      userErrors: data.metafieldDefinitionCreate.userErrors,
-    }, `metafield:${definition.ownerType}:${definition.namespace}.${definition.key}`);
+    const payload = data.metafieldDefinitionCreate;
+    assertMutation(payload.createdDefinition, payload.userErrors,
+      `metafield:${definition.ownerType}:${definition.namespace}.${definition.key}`);
   }
 
   async updateMetaobject(entry: DriftItem, force = false): Promise<void> {
@@ -187,17 +191,16 @@ export class AdminClient {
       id: entry.item.existing?.id,
       definition: metaobjectUpdateInput(entry, force),
     }, true);
-    assertMutation(data.metaobjectDefinitionUpdate, entry.item.identity);
+    const payload = data.metaobjectDefinitionUpdate;
+    assertMutation(payload.metaobjectDefinition, payload.userErrors, entry.item.identity);
   }
 
   async updateMetafield(entry: DriftItem, force = false): Promise<void> {
     const data = await this.request<{
       metafieldDefinitionUpdate: { updatedDefinition: { id: string } | null; userErrors: UserError[] };
     }>(METAFIELD_UPDATE, { definition: metafieldUpdateInput(entry, force) }, true);
-    assertMutation({
-      created: data.metafieldDefinitionUpdate.updatedDefinition,
-      userErrors: data.metafieldDefinitionUpdate.userErrors,
-    }, entry.item.identity);
+    const payload = data.metafieldDefinitionUpdate;
+    assertMutation(payload.updatedDefinition, payload.userErrors, entry.item.identity);
   }
 }
 
@@ -274,14 +277,13 @@ export async function synchronize(
 
 interface UserError { field?: string[]; message: string; code?: string }
 
-function assertMutation(
-  payload: { metaobjectDefinition?: unknown; created?: unknown; userErrors: UserError[] },
-  identity: string,
-): void {
-  if (payload.userErrors.length > 0) {
-    throw new AdminError(`${identity}: ${payload.userErrors.map((error) => error.message).join('; ')}`);
+// Each mutation names its payload field differently, so the caller passes the definition it
+// found rather than a shape this has to know about.
+function assertMutation(definition: unknown, userErrors: UserError[], identity: string): void {
+  if (userErrors.length > 0) {
+    throw new AdminError(`${identity}: ${userErrors.map((error) => error.message).join('; ')}`);
   }
-  if (payload.metaobjectDefinition == null && payload.created == null) {
+  if (definition == null) {
     throw new AdminError(`${identity}: Shopify returned no created definition`);
   }
 }
@@ -418,78 +420,6 @@ function capabilityInput(capabilities: Record<string, boolean>): Record<string, 
   return Object.fromEntries(Object.entries(capabilities).map(([key, enabled]) => [key, { enabled }]));
 }
 
-interface RawField {
-  key: string;
-  name: string;
-  description?: string | null;
-  type: { name: string };
-  required?: boolean;
-  validations: { name: string; value: string }[];
-}
-interface RawMetaobject {
-  id: string;
-  type: string;
-  name: string;
-  description?: string | null;
-  displayNameKey?: string | null;
-  access: Record<string, string | null>;
-  capabilities: { publishable: { enabled: boolean }; translatable: { enabled: boolean } };
-  fieldDefinitions: RawField[];
-}
-interface RawMetafield extends RawField {
-  id: string;
-  namespace: string;
-  ownerType: string;
-  access: Record<string, string | null>;
-  capabilities: Record<string, { enabled: boolean }>;
-  constraints?: { key: string | null; values: { nodes: { value: string }[] } } | null;
-  validationStatus: ExistingMetafield['validationStatus'];
-  invalidCount: number;
-}
-
-function mapField(field: RawField) {
-  return {
-    key: field.key,
-    name: field.name,
-    description: field.description,
-    type: field.type,
-    required: field.required,
-    validations: field.validations,
-  };
-}
-
-function mapMetaobject(value: RawMetaobject): ExistingMetaobject {
-  return {
-    id: value.id,
-    type: value.type,
-    name: value.name,
-    description: value.description,
-    displayNameKey: value.displayNameKey,
-    access: value.access,
-    capabilities: {
-      publishable: value.capabilities.publishable.enabled,
-      translatable: value.capabilities.translatable.enabled,
-    },
-    fields: value.fieldDefinitions.map(mapField),
-  };
-}
-
-function mapMetafield(value: RawMetafield): ExistingMetafield {
-  return {
-    ...mapField(value),
-    id: value.id,
-    namespace: value.namespace,
-    ownerType: value.ownerType,
-    access: value.access,
-    capabilities: Object.fromEntries(Object.entries(value.capabilities).map(([key, item]) => [key, item.enabled])),
-    constraints: value.constraints
-      ? { key: value.constraints.key, values: value.constraints.values.nodes.map((item) => item.value) }
-      : null,
-    validationStatus: value.validationStatus,
-    invalidCount: value.invalidCount,
-  };
-}
-
 function redactError(error: unknown): Error {
   if (error instanceof AdminError) return error;
   return new AdminError(error instanceof Error ? error.message : String(error));
@@ -505,39 +435,16 @@ function delay(milliseconds: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 
-const FIELD_SELECTION = `
-  key name description type { name } required validations { name value }
-`;
-
 const METAOBJECT_QUERY = `
 query MetaobjectDefinition($type: String!) {
-  metaobjectDefinitionByType(type: $type) {
-    id type name description displayNameKey
-    access { admin storefront }
-    capabilities { publishable { enabled } translatable { enabled } }
-    fieldDefinitions { ${FIELD_SELECTION} }
-  }
+  metaobjectDefinitionByType(type: $type) { ${METAOBJECT_SELECTION} }
 }`;
 
 // Owner, namespace and key travel in `identifier`, never as top-level arguments: the only other
 // selector is `id`, which is deprecated and which a schema-first tool has no way to know.
 const METAFIELD_QUERY = `
 query MetafieldDefinition($identifier: MetafieldDefinitionIdentifierInput!) {
-  metafieldDefinition(identifier: $identifier) {
-    id namespace key ownerType name description type { name }
-    validations { name value }
-    access { admin storefront customerAccount }
-    capabilities {
-      adminFilterable { enabled }
-      analyticsQueryable { enabled }
-      cartToOrderCopyable { enabled }
-      smartCollectionCondition { enabled }
-      uniqueValues { enabled }
-    }
-    constraints { key values(first: 250) { nodes { value } } }
-    validationStatus
-    invalidCount: metafieldsCount(validationStatus: INVALID)
-  }
+  metafieldDefinition(identifier: $identifier) { ${METAFIELD_SELECTION} }
 }`;
 
 const METAOBJECT_CREATE = `

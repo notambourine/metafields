@@ -49,6 +49,11 @@ syntax. Compile untrusted pull-request declarations before a credentialed workfl
 npx @notambourine/metafields compile ./schema.ts --out ./schema.json
 ```
 
+Every command accepts `--json` and answers with a single JSON object on stdout, carrying the
+identities it left out under `excluded` or `skipped`. Without `--json`, the document goes to
+stdout and those identities to stderr, so stdout stays pipeable. Writing to `--out` reports
+`{"status":"written","out":"..."}` instead of the document.
+
 ## Changes and safety
 
 Without `--apply`, the CLI only reports drift. A definition is updated as one unit: if any part is
