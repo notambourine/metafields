@@ -155,6 +155,47 @@ const promo: string | undefined = product.custom.promo_text;
 const sku: string = product.custom.sku; // declared required
 ```
 
+### `doctor`
+
+The list of metafield types this package knows is generated from Shopify, not transcribed, and
+ships inside the release. `doctor` asks whether that release still describes the API you point it
+at. It needs no store and no credentials, because shopify.dev proxies the list to anyone:
+
+```
+$ npx @notambourine/metafields doctor
+OK   api version 2026-07 is supported
+OK   type table matches the Admin API 2026-07
+```
+
+Exit `0` when every check passes, `1` when one fails, `2` when a check could not run at all. An
+unreachable shopify.dev is the last of those, never a failed check. `--json` reports the same
+checks plus the installed package version.
+
+The API version pin is checked first, because Shopify stops serving a version about a year after
+it ships and nothing else in a build tells you:
+
+```
+$ npx @notambourine/metafields doctor --api-version 2019-01
+FAIL api version 2019-01 is not one Shopify serves
+     pass --api-version with a version Shopify still supports
+```
+
+The type table is then compared against that version. Without `--api-version` a difference means
+Shopify moved and the installed release is behind, so upgrade. With one, it means the shipped
+table never described the version you target, which no upgrade fixes:
+
+```
+$ npx @notambourine/metafields doctor --api-version 2025-10
+OK   api version 2025-10 is supported
+FAIL type table differs from the Admin API 2025-10
+     removed owner TRANSFER
+     this release ships the table for 2026-07, not 2025-10
+```
+
+In CI, note that Dependabot or Renovate already tells you the package is behind, without a network
+call to shopify.dev. `doctor` earns its place on the version pin, on `--api-version`, and when you
+want the build to fail on the difference itself rather than on a version number.
+
 ## Liquid
 
 `emit --liquid` writes `.shopify/metafields.json`, the file Shopify's Liquid language server reads

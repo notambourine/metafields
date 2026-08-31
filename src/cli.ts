@@ -20,9 +20,10 @@ import { blockedAdvice, type DriftItem } from './changes.js';
 import type { PlanItem, SyncMode } from './planner.js';
 import { pullSchema } from './pull.js';
 import { compileSchema, OWNER_TYPES, SCHEMA_MARKER, stringifyCanonical, type Owner } from './schema.js';
+import { doctorExitCode, runDoctor, type DoctorReport } from './doctor.js';
 
 interface Arguments {
-  command: 'sync' | 'pull' | 'compile' | 'emit' | 'migrate' | 'help' | 'version';
+  command: 'sync' | 'pull' | 'compile' | 'emit' | 'migrate' | 'doctor' | 'help' | 'version';
   positional: string[];
   values: Map<string, string[]>;
   flags: Set<string>;
@@ -54,7 +55,27 @@ async function main(argv: string[]): Promise<number> {
   if (args.command === 'emit') return emitCommand(args);
   if (args.command === 'pull') return pullCommand(args);
   if (args.command === 'migrate') return migrateCommand(args);
+  if (args.command === 'doctor') return doctorCommand(args);
   return syncCommand(args);
+}
+
+// The one command that reaches Shopify without a store: shopify.dev proxies the type list to
+// anyone. Kept out of sync so that no store operation depends on shopify.dev being up.
+async function doctorCommand(args: Arguments): Promise<number> {
+  if (args.positional.length > 0) throw new Error('doctor accepts no positional arguments');
+  const report = await runDoctor(oneValue(args, 'api-version', false));
+  output(args, { installed: await packageVersion(), ...report }, renderDoctor(report));
+  return doctorExitCode(report);
+}
+
+function renderDoctor(report: DoctorReport): string {
+  const lines: string[] = [];
+  for (const check of report.checks) {
+    lines.push(`${check.ok ? 'OK  ' : 'FAIL'} ${check.summary}`);
+    for (const line of check.details) lines.push(`     ${line}`);
+  }
+  lines.push('');
+  return lines.join('\n');
 }
 
 async function syncCommand(args: Arguments): Promise<number> {
@@ -197,7 +218,7 @@ function parseArguments(argv: string[]): Arguments {
   let command: Arguments['command'] = 'sync';
   const rest = [...argv];
   const first = rest[0];
-  if (first && ['sync', 'pull', 'compile', 'emit', 'migrate', 'help', 'version'].includes(first)) {
+  if (first && ['sync', 'pull', 'compile', 'emit', 'migrate', 'doctor', 'help', 'version'].includes(first)) {
     command = rest.shift() as Arguments['command'];
   }
   while (rest.length > 0) {
@@ -385,6 +406,7 @@ Usage:
   metafields emit <schema.ts> --liquid [--out .shopify/metafields.json] [--force]
   metafields migrate <compiled-migration.json> --store <store.myshopify.com>
                      [--apply] [--dry-run] [--json]
+  metafields doctor [--api-version <YYYY-MM>] [--json]
 
 Options:
   --store <host>           Target store; repeat for a fleet

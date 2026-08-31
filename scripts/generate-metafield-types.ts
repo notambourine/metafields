@@ -1,49 +1,26 @@
 #!/usr/bin/env node
 // Regenerates src/metafield-types.ts from Shopify's own list of metafield types.
 //
-// The Admin API exposes metafieldDefinitionTypes, and shopify.dev proxies it without a store,
-// a token, or an app: the same endpoint @shopify/api-codegen-preset points graphql-codegen at.
-// So the authoritative list is fetchable in CI, and the generated module is checked in, which
-// keeps the network out of install and out of the test run.
+// The generated module is checked in, which keeps the network out of install and out of the
+// test run. Fetching lives in src/type-registry.ts so that `metafields check-types` and this
+// generator read the list exactly one way; scripts cannot import src under type stripping, so
+// this runs against the build (see the generate:metafield-types npm script).
 //
-//   node scripts/generate-metafield-types.ts            # rewrite src/metafield-types.ts
-//   node scripts/generate-metafield-types.ts --check    # fail if it is stale
+//   npm run generate:metafield-types              # rewrite src/metafield-types.ts
+//   npm run generate:metafield-types -- --check   # fail if it is stale
+//
+// Exit codes follow the CLI's: 0 matches, 1 stale, 2 indeterminate. The scheduled check needs
+// the difference. Stale is a pull request; indeterminate is the proxy being down or the pinned
+// API version having aged out, and only a person can choose the version that replaces it.
 
 import { readFile, writeFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
+import { DEFAULT_API_VERSION } from '../dist/admin.js';
+import { fetchRegistry, type RegistryType } from '../dist/type-registry.js';
 
 const OUT = fileURLToPath(new URL('../src/metafield-types.ts', import.meta.url));
-const ADMIN = fileURLToPath(new URL('../src/admin.ts', import.meta.url));
 
-interface TypeRow {
-  name: string;
-  category: string;
-  supportsDefinitionMigrations: boolean;
-  supportedValidations: { name: string; type: string }[];
-}
-
-// The proxy serves only the versions Shopify currently supports and answers
-// {"error":"Invalid API version"} for the rest, so generating against the version we send is
-// also the check that the version has not aged out.
-async function apiVersion(): Promise<string> {
-  const source = await readFile(ADMIN, 'utf8');
-  const match = /DEFAULT_API_VERSION = '([^']+)'/.exec(source);
-  if (!match?.[1]) throw new Error('cannot find DEFAULT_API_VERSION in src/admin.ts');
-  return match[1];
-}
-
-async function query<T>(version: string, document: string): Promise<T> {
-  const response = await fetch(`https://shopify.dev/admin-graphql-direct-proxy/${version}`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ query: document }),
-  });
-  if (!response.ok) throw new Error(`proxy answered HTTP ${response.status}`);
-  const body = await response.json() as { data?: T; error?: string; errors?: unknown };
-  if (body.error) throw new Error(`proxy rejected ${version}: ${body.error}`);
-  if (!body.data) throw new Error(`proxy returned no data: ${JSON.stringify(body.errors)}`);
-  return body.data;
-}
+type TypeRow = RegistryType;
 
 // Single quotes, to match the rest of src/.
 function quote(value: string): string {
@@ -55,7 +32,7 @@ function property(key: string): string {
   return /^[A-Za-z_$][\w$]*$/.test(key) ? key : quote(key);
 }
 
-function render(version: string, types: TypeRow[], owners: string[]): string {
+function render(version: string, types: readonly TypeRow[], owners: readonly string[]): string {
   const rows = [...types].sort((a, b) => a.name.localeCompare(b.name)).map((type) => {
     const validations = [...type.supportedValidations]
       .map((validation) => validation.name)
@@ -92,18 +69,13 @@ function render(version: string, types: TypeRow[], owners: string[]): string {
   ].join('\n');
 }
 
-const version = await apiVersion();
-const { metafieldDefinitionTypes } = await query<{ metafieldDefinitionTypes: TypeRow[] }>(
-  version,
-  '{ metafieldDefinitionTypes { name category supportsDefinitionMigrations supportedValidations { name type } } }',
-);
-const { __type: ownerEnum } = await query<{ __type: { enumValues: { name: string }[] } | null }>(
-  version,
-  '{ __type(name: "MetafieldOwnerType") { enumValues { name } } }',
-);
-if (!ownerEnum) throw new Error('MetafieldOwnerType is missing from the schema');
+const { version, types, owners } = await fetchRegistry(DEFAULT_API_VERSION).catch((error: unknown) => {
+  console.error(`Cannot read the Admin API: ${error instanceof Error ? error.message : String(error)}`);
+  console.error('If DEFAULT_API_VERSION in src/admin.ts has aged out, pin a supported one first.');
+  process.exit(2);
+});
 
-const generated = render(version, metafieldDefinitionTypes, ownerEnum.enumValues.map((value) => value.name));
+const generated = render(version, types, owners);
 const current = await readFile(OUT, 'utf8').catch(() => '');
 
 if (process.argv.includes('--check')) {
@@ -121,5 +93,5 @@ if (process.argv.includes('--check')) {
 } else {
   await writeFile(OUT, generated);
   console.log(`Wrote src/metafield-types.ts from the Admin API ${version}: ` +
-    `${metafieldDefinitionTypes.length} types, ${ownerEnum.enumValues.length} owner types.`);
+    `${types.length} types, ${owners.length} owner types.`);
 }
