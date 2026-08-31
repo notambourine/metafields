@@ -1,8 +1,5 @@
-// Compares the type table this package shipped against what the Admin API reports now.
-//
-// It answers two questions with one call. On the version this package was generated for, a
-// difference means the installed release is behind Shopify. On any other --api-version, it
-// means the table never described that version in the first place, which no upgrade fixes.
+// A difference on the generated API version means this release is stale; on another version,
+// the shipped table was never authoritative and upgrading cannot repair the mismatch.
 
 import { METAFIELD_OWNER_TYPES, METAFIELD_TYPES, type MetafieldTypeInfo } from './metafield-types.js';
 import type { Registry, RegistryType } from './type-registry.js';
@@ -75,4 +72,3 @@ export function compareRegistry(registry: Registry): TypeCheck {
   const owners = compareNames(registry.owners, METAFIELD_OWNER_TYPES);
   return { version: registry.version, matches: types.length === 0 && owners.length === 0, types, owners };
 }
-

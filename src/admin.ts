@@ -86,9 +86,8 @@ export class AdminClient {
   }
 
   async request<T>(query: string, variables: Record<string, unknown> = {}, mutation = false): Promise<T> {
-    // A mutation is not idempotent, so a timeout or a 5xx (either of which may already have
-    // landed) is still sent once. A throttle is neither: Shopify rejects the request before
-    // running it, so a retried create cannot leave a second definition behind.
+    // A timeout or 5xx may have landed, but Shopify rejects THROTTLED before execution.
+    // Retry only the latter to avoid duplicate creates.
     const attempts = this.#retries + 1;
     const retriesTransient = !mutation;
     let lastError: unknown;

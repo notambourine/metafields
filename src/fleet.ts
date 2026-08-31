@@ -70,9 +70,7 @@ export async function synchronizeFleet(
   }
   if (reached.length === 0) throw new AdminError('no store could be planned');
   if (mode !== 'apply') return { mode, stores };
-  // No cross-store block: every store applies the same set and skips the same definitions, so
-  // the fleet stays uniform on its own, which was the only thing the block bought. Per store,
-  // so one store refusing a write does not stop the next.
+  // Identical per-store plans preserve uniformity without letting one refusal stop the fleet.
   for (const { client, outcome } of reached) {
     try {
       const result = await applyPlan(client, schema, outcome.plan, outcome.drift, force);

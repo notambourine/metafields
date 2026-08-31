@@ -1,9 +1,13 @@
 # @notambourine/metafields
 
-Declare merchant-owned Shopify metafield and metaobject definitions in TypeScript, inspect drift,
-and make a store match. `--apply` is additive: it creates what is missing and widens what already
-exists. `--force` is the one opt-in that changes how something already there behaves, and nothing
-deletes a definition under any flag.
+Declare Shopify metafield and metaobject definitions in TypeScript, inspect store drift, and apply
+safe changes. The CLI never deletes or retypes a definition.
+
+Requires Node.js 22.18 or newer.
+
+## Quick start
+
+Create `schema.ts`:
 
 ```ts
 import { defineSchema, field, metaobject } from '@notambourine/metafields';
@@ -30,206 +34,137 @@ export default defineSchema({
 });
 ```
 
+Validate it, inspect a store, then apply the plan:
+
 ```sh
-npx @notambourine/metafields ./schema.ts --validate                              # schema only
-npx @notambourine/metafields ./schema.ts --store example.myshopify.com           # report
+npx @notambourine/metafields ./schema.ts --validate
+npx @notambourine/metafields ./schema.ts --store example.myshopify.com
 npx @notambourine/metafields ./schema.ts --store example.myshopify.com --apply
-npx @notambourine/metafields ./schema.ts --store example.myshopify.com --apply --force
-npx @notambourine/metafields ./schema.ts --store example.myshopify.com --apply --dry-run
 ```
 
-The default command reports without writing. The exit code describes the store, not the flags:
-`0` means it matches, `1` means real drift remains after the run, and `2` means invalid input,
-indeterminate Shopify state, or an API failure. `--dry-run` cancels whatever write was asked for,
-so the exact command line CI runs takes one appended flag to show what it would do, and works as a
-gate that flips to `0` once the work lands.
-
-Schema modules use Node's built-in type stripping and must use erasable TypeScript syntax.
-Importing one executes trusted local code, so compile declarations to canonical JSON before a
-secret-bearing workflow consumes pull-request output.
-
-See `metafields --help` for `pull`, `compile`, `emit`, and migration commands.
-
-## Auth
-
-Set `SHOPIFY_APP_CLIENT_ID` and `SHOPIFY_APP_SECRET`, and the CLI mints a short-lived Admin token
-per store with the `client_credentials` grant. The client id can come from three places, most
-explicit first: `--client-id`, `--app-config ./shopify.app.toml`, then the environment. The secret
-is only ever an environment variable.
+Schema modules run as trusted local code through Node's type stripping. Use erasable TypeScript
+syntax. Compile untrusted pull-request declarations before a credentialed workflow consumes them:
 
 ```sh
-metafields ./schema.ts --app-config ./shopify.app.toml --store example.myshopify.com --apply
+npx @notambourine/metafields compile ./schema.ts --out ./schema.json
 ```
 
-`--app-config` reads the top-level `client_id` out of the app TOML the Shopify CLI already
-requires; a `client_id` under a `[section]` belongs to that section and is never read.
-`readAppConfig()` is exported for programmatic callers. Two grant errors stay distinct because a
-fleet treats them differently: `app_not_installed` means the store has not installed the app,
-`shop_not_permitted` means the app and the store are in different organizations.
+## Changes and safety
 
-`SHOPIFY_ADMIN_ACCESS_TOKEN` still works and reaches one store. Complete app credentials win when
-both are set, and half-set ones fall back to the token rather than failing. Only a fleet, which one
-token cannot reach, requires the app. Minted tokens are never logged, and Shopify credential
-prefixes are redacted from errors.
+Without `--apply`, the CLI only reports drift. A definition is updated as one unit: if any part is
+blocked or needs `--force`, its other changes wait too. Other definitions continue independently.
 
-## What `--apply` writes, and what needs `--force`
+| Change | Required mode |
+| --- | --- |
+| Create a definition or add a metaobject field | `--apply` |
+| Update labels, `displayNameKey`, or enable a capability | `--apply` |
+| Change access, validations, constraints, or `required` | `--apply --force` |
+| Disable a capability | `--apply --force` |
+| Delete or retype a definition | Never performed |
+| Change invalid values or a definition Shopify is still validating | Never performed |
 
-The line runs through the updates, not between creating and updating. Adding a missing field to a
-metaobject is purely additive; narrowing storefront access can break a live theme.
+`--force` opts into changes that can break a storefront or strand stored values. For schema sync it
+requires `--apply`; it cannot override Shopify constraints or repair data.
 
-Applied by `--apply`:
+Use `--dry-run` to cancel requested writes while preserving the plan and exit code:
 
-- Creating a definition, metaobject or metafield. A new definition has no stored values and no
-  live readers, so nothing about it can break anything.
-- A field missing from an existing metaobject.
-- Metaobject `displayNameKey`.
-- Enabling a capability, `adminFilterable` most often.
-- Drifted `name` and `description`. Both are labels, so no stored value can be lost by rewriting
-  one. They never affect the exit code, and a definition that has only drifted cosmetically stays
-  `PRESENT`.
+```sh
+npx @notambourine/metafields ./schema.ts \
+  --store example.myshopify.com --apply --force --dry-run
+```
 
-Needs `--force`, because each can change how something already in use behaves:
+Exit codes describe the result:
 
-- `access`, on a metafield or a metaobject. Narrowing it stops a storefront reading the field.
-- `validations` and `constraints`. Tightening either can strand stored values.
-- `required: true` on a metaobject field.
-- Disabling a capability.
+- `0`: the store matches the schema.
+- `1`: actionable drift remains.
+- `2`: input is invalid, Shopify state is indeterminate, or an operation failed.
 
-Reported and skipped, never attempted, with or without `--force`:
+Cosmetic label drift does not change the exit code. Mutations retry Shopify's explicit
+`THROTTLED` response, but are not retried after a timeout or `5xx` because the first request may
+have landed.
 
-- A `type` that differs. Shopify will not retype a definition that has stored values; that is what
-  the migration commands are for.
-- Invalid stored values (`validationStatus: SOME_INVALID`). That is data, not shape.
-- Anything `INDETERMINATE`, meaning validation is still in progress. Wait, do not write.
+## Authentication
 
-`--force` requires `--apply`; alone it has no write to widen. It overrides the tool's own judgment,
-never a Shopify constraint and never a data problem, and it means the same thing everywhere in the
-CLI, including `emit --liquid` refusing to clobber a file it did not generate.
+For one store, set an Admin API token:
 
-A definition is skipped whole, never half-updated: if one definition holds both an applied change
-and one needing force, it gets neither until forced. Skipping one definition does not stop the
-others, so `--apply` alone against a store holding drift that needs force writes everything it can,
-names what it skipped, and exits `1`. An update carries only the attributes the plan reported as
-drifted, so changing a capability never rewrites a name.
+```sh
+export SHOPIFY_ADMIN_ACCESS_TOKEN=...
+```
 
-`--apply` updates existing definitions first, metaobjects before metafields, so a metaobject a new
-metafield references is already correct; then it creates the missing ones in the same order. A
-description over 255 characters fails `--validate` and fails sync before the first request, listing
-every offender at once. Shopify refuses `required: true` on a field whose existing entries are
-blank, and that `userErrors` message is surfaced intact so the operator knows which entries to
-fill.
+For one store or a fleet, set app credentials. The CLI mints a short-lived token for each store:
 
-A rate limit is retried on a backoff, on reads and on writes alike: the Admin GraphQL API answers
-one with HTTP 200 carrying `THROTTLED` and rejects the request before running it, so a retried
-create cannot leave a second definition behind. A timeout or a `5xx`, either of which may already
-have landed, is still sent exactly once for a mutation.
+```sh
+export SHOPIFY_APP_CLIENT_ID=...
+export SHOPIFY_APP_SECRET=...
+```
+
+The client ID is resolved from `--client-id`, then `--app-config`, then
+`SHOPIFY_APP_CLIENT_ID`. The secret is read only from `SHOPIFY_APP_SECRET`.
+
+```sh
+npx @notambourine/metafields ./schema.ts \
+  --app-config ./shopify.app.toml --store example.myshopify.com --apply
+```
+
+`--app-config` reads only the top-level `client_id`. Complete app credentials take priority over a
+static token; incomplete app credentials fall back to the token. Credentials are redacted from
+errors.
 
 ## Fleets
 
-`--store` repeats, and `--stores-from <file>` sweeps a list of stores, one per line, with `#`
-comments:
+Repeat `--store` or load one store per line from a file. Lines beginning with `#` are ignored.
 
 ```sh
-metafields ./schema.ts --store flagship.myshopify.com --stores-from ./stores.txt --apply
+npx @notambourine/metafields ./schema.ts \
+  --store flagship.myshopify.com --stores-from ./stores.txt --apply
 ```
 
-- Every store applies the same set and skips the same definitions, so the fleet stays uniform
-  without withholding from one store the creates another cannot take.
-- A swept store that cannot be reached is reported and does not abort the run, as long as one store
-  could be planned. A swept store that has not installed the app is reported as `NOT-INSTALLED` and
-  keeps the run green. A store named on the command line never fails quietly.
-- Writes run per store, so one store refusing does not stop the next, and every refusal is
-  reported together.
-- Exit is `2` if any store was unreachable or refused a write, even when every reached store came
-  back clean.
+Each store receives the same plan. One store refusing a write does not stop the others. A store
+named directly fails loudly; a swept store without the app is reported as `NOT-INSTALLED` without
+failing the fleet. Other unreachable stores and rejected writes exit `2`.
+
+## Pull and generated output
+
+Pull existing definitions into a new schema file:
+
+```sh
+npx @notambourine/metafields pull \
+  --store example.myshopify.com \
+  --owner product \
+  --namespace custom \
+  --metaobjects \
+  --out schema.ts
+```
+
+Owners and namespaces must be explicit unless their corresponding `--all-owners` or
+`--all-namespaces` flag is passed. The output path must not exist; omit `--out` to write to stdout.
+
+Generate Liquid editor metadata from the schema:
+
+```sh
+npx @notambourine/metafields emit ./schema.ts \
+  --liquid --out .shopify/metafields.json
+```
+
+The generated file supports Liquid completion and hover without a store login. It cannot represent
+metaobjects, `required`, validations, access, customer metafields, or draft-order metafields.
+`emit` refuses to replace a file it did not generate unless passed `--force`.
 
 ## Types
 
-The schema is the single declaration. Value types come back out of it with `InferMetafields` and
-`InferMetaobjects`, and fields declared `required: true` are not optional in the inferred type:
+Infer application types from the schema. Required declarations remain required:
 
 ```ts
-type Product = InferMetafields<typeof schema>['product'];
+import type { InferMetafields, InferMetaobjects } from '@notambourine/metafields';
+import schema from './schema.js';
 
-const promo: string | undefined = product.custom.promo_text;
-const sku: string = product.custom.sku; // declared required
+type ProductMetafields = InferMetafields<typeof schema>['product'];
+type Faq = InferMetaobjects<typeof schema>['faq'];
 ```
-
-### `doctor`
-
-The list of metafield types this package knows is generated from Shopify, not transcribed, and
-ships inside the release. `doctor` asks whether that release still describes the API you point it
-at. It needs no store and no credentials, because shopify.dev proxies the list to anyone:
-
-```
-$ npx @notambourine/metafields doctor
-OK   api version 2026-07 is supported
-OK   type table matches the Admin API 2026-07
-```
-
-Exit `0` when every check passes, `1` when one fails, `2` when a check could not run at all. An
-unreachable shopify.dev is the last of those, never a failed check. `--json` reports the same
-checks plus the installed package version.
-
-The API version pin is checked first, because Shopify stops serving a version about a year after
-it ships and nothing else in a build tells you:
-
-```
-$ npx @notambourine/metafields doctor --api-version 2019-01
-FAIL api version 2019-01 is not one Shopify serves
-     pass --api-version with a version Shopify still supports
-```
-
-The type table is then compared against that version. Without `--api-version` a difference means
-Shopify moved and the installed release is behind, so upgrade. With one, it means the shipped
-table never described the version you target, which no upgrade fixes:
-
-```
-$ npx @notambourine/metafields doctor --api-version 2025-10
-OK   api version 2025-10 is supported
-FAIL type table differs from the Admin API 2025-10
-     removed owner TRANSFER
-     this release ships the table for 2026-07, not 2025-10
-```
-
-In CI, note that Dependabot or Renovate already tells you the package is behind, without a network
-call to shopify.dev. `doctor` earns its place on the version pin, on `--api-version`, and when you
-want the build to fail on the difference itself rather than on a version number.
-
-## Liquid
-
-`emit --liquid` writes `.shopify/metafields.json`, the file Shopify's Liquid language server reads
-to complete and hover `product.metafields.custom.promo_text`:
-
-```sh
-metafields emit ./schema.ts --liquid --out .shopify/metafields.json
-```
-
-Generating it from the schema means completions work without a store login, and cover definitions
-that are declared but not yet created. This drives editor assistance only: no theme-check rule
-validates metafields, so nothing here fails a build.
-
-The file's shape carries less than the schema does. It has no field for `required`, validations, or
-access, it cannot represent metaobject definitions, and it has no group for `customer` or
-`draft_order` metafields, which are reported as skipped. Treat it as a generated artifact that
-`emit` replaces, and that `emit` refuses to overwrite until `--force` says otherwise if it did not
-generate it. Shopify's own `shopify theme metafields pull` overwrites the same path, so do not
-hand-edit it.
-
-## Pull
-
-`pull` requires explicit owners and namespaces:
-
-```sh
-metafields pull --store example.myshopify.com \
-  --owner product --namespace custom --metaobjects --out schema.ts
-```
-
-The output path must not exist. Without `--out`, the generated module is written to stdout.
 
 ## Migrations
 
-Migrations are declarative, copy-only, and compiled before credentials are introduced:
+Migrations copy values to a new definition. They never retype or delete the source.
 
 ```ts
 import { defineMigration, transforms } from '@notambourine/metafields';
@@ -250,13 +185,30 @@ export default defineMigration({
 });
 ```
 
+Compile before introducing credentials, inspect the plan, then apply it:
+
 ```sh
-metafields compile ./migration.ts --out ./migration.json
-metafields migrate ./migration.json --store example.myshopify.com
-metafields migrate ./migration.json --store example.myshopify.com --apply
+npx @notambourine/metafields compile ./migration.ts --out ./migration.json
+npx @notambourine/metafields migrate ./migration.json --store example.myshopify.com
+npx @notambourine/metafields migrate ./migration.json --store example.myshopify.com --apply
 ```
 
-`migrate` exits `1` while rows are still pending, the same way schema drift does.
+Migration exit code `1` means rows remain pending.
 
-`0.x` is prerelease quality. Confirm owner scopes and behavior against a development store before
-production use.
+## API compatibility
+
+`doctor` checks that Shopify still serves the selected API version and that the package's generated
+metafield type table matches it. It needs no store or credentials.
+
+```sh
+npx @notambourine/metafields doctor
+npx @notambourine/metafields doctor --api-version 2025-10 --json
+```
+
+An unsupported version or changed type table is a failed check. An unreachable Shopify registry is
+indeterminate and exits `2`.
+
+Run `npx @notambourine/metafields --help` for the complete CLI reference.
+
+This `0.x` release is prerelease quality. Confirm scopes and behavior against a development store
+before production use.

@@ -22,9 +22,8 @@ const FACTORY_TYPES: Record<string, string> = {
   mixedMetaobject: 'mixed_reference',
 };
 
-// Shopify publishes no list.* counterpart for these, so field.list() around one of them builds a
-// type the Admin API will reject. Documented rather than fixed: narrowing field.list() means
-// threading the type string through FieldDefinition, which is a breaking type change.
+// Shopify publishes no list counterpart for these; fixing field.list() requires a breaking
+// FieldDefinition type change.
 const NOT_LISTABLE = ['boolean', 'json', 'multi_line_text_field', 'rich_text_field'];
 
 function typeOf(name: string): string {

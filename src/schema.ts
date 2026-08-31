@@ -10,9 +10,7 @@ import {
 
 export { SCHEMA_MARKER } from './types.js';
 
-// The handles this tool accepts, mapped to Shopify's enum. A deliberate subset: the enum also
-// carries owners no merchant declares custom data on. `satisfies` is what keeps the right-hand
-// side honest against the generated enum.
+// Accept only merchant-owned custom-data handles while checking them against Shopify's enum.
 export const OWNER_TYPES = {
   article: 'ARTICLE',
   blog: 'BLOG',

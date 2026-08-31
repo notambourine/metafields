@@ -1,12 +1,6 @@
 #!/usr/bin/env bash
-# Fail a PR that changes what gets published without bumping the version. Merging a
-# version bump to main is what releases (.github/workflows/publish.yml), so an unbumped
-# change to shipped code lands on main and never reaches npm.
-#
-# Deny-by-default: every path counts as shipped unless listed below, so a source file
-# added under a new directory is covered from its first commit.
-#
-# Usage: scripts/check-version-bump.sh [base-ref]   (default origin/main)
+# Published changes need a version bump because merging that bump triggers release.
+# Paths default to published unless explicitly exempted below.
 set -uo pipefail
 
 BASE=${1:-origin/main}

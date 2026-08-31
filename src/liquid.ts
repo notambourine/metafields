@@ -52,9 +52,7 @@ export function emitLiquidMetafields(schema: CompiledSchema): LiquidEmit {
   return { definitions, skipped };
 }
 
-// Categories come from Shopify's own type list. The language server reads only type.name, so a
-// category is descriptive rather than load bearing; a type Shopify does not publish is the
-// interesting case, and UNKNOWN is how it shows up in the emitted file.
+// The language server ignores categories; UNKNOWN exposes types missing from Shopify's list.
 function categoryOf(type: string): string {
   const base = type.startsWith('list.') ? type.slice('list.'.length) : type;
   const types: Record<string, { category: string } | undefined> = METAFIELD_TYPES;

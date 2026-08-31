@@ -1,8 +1,5 @@
-// What an adopting repo can check in CI without a store, a token, or an app.
-//
-// Every check answers the same question from a different side: does this installed release
-// still describe the Shopify API you are pointing it at. A check that fails is a finding
-// somebody can act on. A check that cannot run at all is not a finding, and throws instead.
+// Checks whether this release describes the selected Shopify API without store credentials.
+// Actionable differences are findings; checks that cannot run throw instead.
 
 import { DEFAULT_API_VERSION } from './admin.js';
 import { compareRegistry } from './type-check.js';

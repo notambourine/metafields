@@ -240,9 +240,8 @@ export function planFrom(items: PlanItem[]): Plan {
   };
 }
 
-// The code describes the store, not the flags: any real drift left standing is nonzero in every
-// mode, so appending --dry-run to the command CI runs gates on the same answer. Cosmetic notices
-// are not drift and never reach it.
+// Exit describes remaining store drift in every mode, so --dry-run preserves CI semantics.
+// Cosmetic notices are not drift.
 export function exitCodeForPlan(plan: Plan): number {
   if (plan.indeterminate > 0) return 2;
   if (plan.conflicts > 0 || plan.creates > 0) return 1;

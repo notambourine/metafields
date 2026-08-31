@@ -1,10 +1,5 @@
-// Shopify's own metafield type list, read without a store, a token, or an app: shopify.dev
-// proxies the Admin API, the same endpoint @shopify/api-codegen-preset points codegen at.
-// src/metafield-types.ts is generated from this; `metafields check-types` compares the two.
-//
-// The proxy serves only the versions Shopify currently supports and answers
-// {"error":"Invalid API version"} for the rest, so reaching it is also the check that the
-// version being asked about has not aged out.
+// shopify.dev exposes Shopify's type registry without store credentials and rejects aged-out
+// API versions, so the same request supplies metadata and validates the version pin.
 
 export interface RegistryType {
   readonly name: string;

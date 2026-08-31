@@ -2,10 +2,8 @@ import type { Plan, PlanItem } from './planner.js';
 
 export interface DriftItem {
   item: PlanItem;
-  // Three buckets on one axis: what `--apply` writes, what it writes only under `--force`, and
-  // what no flag reaches. A definition with anything blocked is skipped whole, and so is one
-  // with anything needing force that was not forced: a partial update to a definition whose
-  // type is wrong reads like progress and is not.
+  // A definition is atomic: blocked drift, or unforced risky drift, defers every change.
+  // This prevents a safe-looking partial update from hiding unresolved shape.
   applies: string[];
   needsForce: string[];
   blocked: string[];
@@ -23,9 +21,7 @@ export function classifyDrift(plan: Plan): DriftPlan {
   for (const item of plan.items) {
     if (item.status === 'CREATE') continue;
     const buckets: Record<Bucket, string[]> = { apply: [], force: [], blocked: [] };
-    // Notices as well as reasons: name and description are labels, so no stored value can be
-    // lost by rewriting one. They stay out of the plan status, so a definition drifted only
-    // cosmetically is still PRESENT and still exits 0.
+    // Labels are safe to rewrite but remain notices, so cosmetic-only drift still exits 0.
     for (const reason of [...item.reasons, ...item.notices]) buckets[bucketFor(item, reason)].push(reason);
     const entry: DriftItem = { item, applies: buckets.apply, needsForce: buckets.force, blocked: buckets.blocked };
     if (entry.applies.length + entry.needsForce.length + entry.blocked.length > 0) items.push(entry);
@@ -94,9 +90,8 @@ function bucketFor(item: PlanItem, reason: string): Bucket {
   if (/(^|\.)type: expected /.test(path)) return 'blocked';
   // Invalid stored values are data, not shape.
   if (path.startsWith('stored values include ')) return 'blocked';
-  // Bucketed by attribute, not by direction, so loosening a validation still asks for the flag.
-  // Capabilities are the exception: the direction is already a boolean in the reason string,
-  // and enabling one (adminFilterable, most often) is both common and harmless.
+  // Risk follows the attribute, not direction; capabilities are the exception because their
+  // direction is explicit and enabling one is harmless.
   if (/(^|\.)capabilities\.[^:]+: expected false/.test(path)) return 'force';
   if (/(^|\.)access\./.test(path)) return 'force';
   if (/(^|\.)(validations|constraints) differ$/.test(path)) return 'force';

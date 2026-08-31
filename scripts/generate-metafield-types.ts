@@ -1,17 +1,6 @@
 #!/usr/bin/env node
-// Regenerates src/metafield-types.ts from Shopify's own list of metafield types.
-//
-// The generated module is checked in, which keeps the network out of install and out of the
-// test run. Fetching lives in src/type-registry.ts so that `metafields check-types` and this
-// generator read the list exactly one way; scripts cannot import src under type stripping, so
-// this runs against the build (see the generate:metafield-types npm script).
-//
-//   npm run generate:metafield-types              # rewrite src/metafield-types.ts
-//   npm run generate:metafield-types -- --check   # fail if it is stale
-//
-// Exit codes follow the CLI's: 0 matches, 1 stale, 2 indeterminate. The scheduled check needs
-// the difference. Stale is a pull request; indeterminate is the proxy being down or the pinned
-// API version having aged out, and only a person can choose the version that replaces it.
+// Generates checked-in type metadata through the same built registry client used by doctor.
+// Exit 1 means stale; exit 2 means the registry was unavailable or the API pin expired.
 
 import { readFile, writeFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
