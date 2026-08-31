@@ -35,13 +35,47 @@ npx @notambourine/metafields ./schema.ts --store example.myshopify.com --apply
 npx @notambourine/metafields ./schema.ts --store example.myshopify.com --check
 ```
 
-Store operations read `SHOPIFY_ADMIN_ACCESS_TOKEN`. The default command is a dry run. Importing a
-TypeScript schema executes trusted local code, so compile declarations to canonical JSON before a
-secret-bearing workflow consumes pull-request output.
+The default command is a dry run. Importing a TypeScript schema executes trusted local code, so
+compile declarations to canonical JSON before a secret-bearing workflow consumes pull-request
+output.
 
 Schema modules use Node's built-in type stripping and must use erasable TypeScript syntax.
 
 See `metafields --help` for `pull`, `compile`, `emit`, and migration commands.
+
+## Auth
+
+Set `SHOPIFY_APP_CLIENT_ID` (or pass `--client-id`) and `SHOPIFY_APP_SECRET`, and the CLI mints a
+short-lived Admin token per store with the `client_credentials` grant. Two grant errors stay
+distinct in the output because a fleet treats them differently: `app_not_installed` means the store
+has not installed the app, `shop_not_permitted` means the app and the store are in different
+organizations.
+
+`SHOPIFY_ADMIN_ACCESS_TOKEN` still works and reaches one store; app auth is an option, not a
+requirement. Complete app credentials win when both are set, and half-set ones fall back to the
+token rather than failing. Only a fleet, which one token cannot reach, requires the app.
+
+Minted tokens are never logged, and Shopify credential prefixes are redacted from errors.
+
+## Fleets
+
+`--store` repeats, and `--stores-from <file>` sweeps a list of stores, one per line, with `#`
+comments:
+
+```sh
+metafields ./schema.ts --store flagship.myshopify.com --stores-from ./stores.txt --apply
+```
+
+- Every store is planned before any store is written to. A conflict on one store exits nonzero
+  having written nothing, because creating on the others first half-applies the fleet.
+- A swept store that cannot be reached is reported and does not abort the run, as long as one store
+  could be planned. A swept store that has not installed the app is reported as `NOT-INSTALLED` and
+  keeps the run green.
+- A store named on the command line never fails quietly; only a swept store is downgraded.
+- Writes run per store, so one store refusing does not stop the next, and every refusal is
+  reported together.
+- Exit is `2` if any store was unreachable or refused a write, even when every reached store came
+  back clean.
 
 ## Types
 
@@ -81,6 +115,9 @@ replaces an existing one and refuses to overwrite a file it did not generate. Sh
 - `--check` exits nonzero for missing or incompatible operational shape.
 - Cosmetic name and description drift is reported but never changed.
 - Existing definitions, values, and entries are never updated or deleted by schema sync.
+- A description over 255 characters fails `--validate` and fails sync before the first request,
+  listing every offender at once. The Admin API answers `TOO_LONG`, and one create rejected
+  mid-run leaves a store half-applied behind an error that reads transient.
 
 Exit `0` means the selected condition is satisfied, exit `1` means schema or migration drift, and
 exit `2` means invalid input, indeterminate Shopify state, or an API failure.

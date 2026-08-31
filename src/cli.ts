@@ -1,8 +1,11 @@
 #!/usr/bin/env node
 import { mkdir, open, readFile, writeFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
-import { AdminClient, DEFAULT_API_VERSION, synchronize } from './admin.js';
+import { AdminClient, DEFAULT_API_VERSION } from './admin.js';
+import { mintAccessToken } from './auth.js';
+import { fleetExitCode, synchronizeFleet, type Connect, type FleetResult, type StoreTarget } from './fleet.js';
 import { generateSchemaModule } from './generator.js';
+import { descriptionViolations } from './limits.js';
 import { loadDefault, loadSchema } from './loader.js';
 import {
   assertCompiledMigration,
@@ -12,7 +15,7 @@ import {
   runMigration,
 } from './migration.js';
 import { emitLiquidMetafields, isLiquidMetafieldsFile } from './liquid.js';
-import { exitCodeForPlan, type Plan } from './planner.js';
+import type { PlanItem, SyncMode } from './planner.js';
 import { pullSchema } from './pull.js';
 import { compileSchema, OWNER_TYPES, SCHEMA_MARKER, stringifyCanonical, type Owner } from './schema.js';
 
@@ -23,7 +26,9 @@ interface Arguments {
   flags: Set<string>;
 }
 
-const valueOptions = new Set(['store', 'api-version', 'owner', 'namespace', 'out']);
+const valueOptions = new Set([
+  'store', 'stores-from', 'client-id', 'api-version', 'owner', 'namespace', 'out',
+]);
 const booleanOptions = new Set([
   'apply', 'check', 'json', 'validate', 'metaobjects', 'all-owners', 'all-namespaces', 'liquid',
   'help', 'version',
@@ -53,16 +58,22 @@ async function syncCommand(args: Arguments): Promise<number> {
   const path = onlyPositional(args, 'schema module');
   const schema = await loadSchema(path);
   if (args.flags.has('validate')) {
+    // Every offender at once: one create rejected mid-run leaves a store half-applied
+    // behind an error that reads transient.
+    const violations = descriptionViolations(schema);
+    if (violations.length > 0) {
+      output(args, { status: 'invalid', violations }, `${violations.map((item) => `INVALID ${item}`).join('\n')}\n`);
+      return 2;
+    }
     output(args, { status: 'valid', metaobjects: schema.metaobjects.length, metafields: schema.metafields.length },
       `VALID ${schema.metaobjects.length} metaobject definition(s), ${schema.metafields.length} metafield definition(s)\n`);
     return 0;
   }
   const mode = modeFrom(args);
-  const client = clientFrom(args);
-  const result = await synchronize(client, schema, mode);
-  const code = exitCodeForPlan(result.plan, mode);
-  output(args, { mode, ...result }, renderPlan(result.plan, result.applied));
-  return code;
+  const targets = await storeTargets(args);
+  const result = await synchronizeFleet(targets, schema, mode, connectorFrom(args, targets.length));
+  output(args, result, renderFleet(result));
+  return fleetExitCode(result, mode);
 }
 
 async function pullCommand(args: Arguments): Promise<number> {
@@ -77,7 +88,7 @@ async function pullCommand(args: Arguments): Promise<number> {
   const namespaces = values(args, 'namespace');
   if (allNamespaces && namespaces.length > 0) throw new Error('--all-namespaces and --namespace are mutually exclusive');
   if (!allNamespaces && namespaces.length === 0) throw new Error('pull requires --namespace or --all-namespaces');
-  const pulled = await pullSchema(clientFrom(args), {
+  const pulled = await pullSchema(await clientFrom(args), {
     owners,
     namespaces,
     allNamespaces,
@@ -163,7 +174,7 @@ async function migrateCommand(args: Arguments): Promise<number> {
   const migration = JSON.parse(await readFile(resolve(process.cwd(), path), 'utf8')) as unknown;
   assertCompiledMigration(migration);
   const mode = modeFrom(args);
-  const result = await runMigration(clientFrom(args), migration, mode);
+  const result = await runMigration(await clientFrom(args), migration, mode);
   output(args, { mode, ...result }, [
     `MIGRATION ${result.id}`,
     `source=${result.source} pending=${result.pending} equal=${result.equal}`,
@@ -206,21 +217,56 @@ function parseArguments(argv: string[]): Arguments {
   return { command, positional, values, flags };
 }
 
-function modeFrom(args: Arguments): 'dry-run' | 'check' | 'apply' {
+function modeFrom(args: Arguments): SyncMode {
   if (args.flags.has('apply')) return 'apply';
   if (args.flags.has('check')) return 'check';
   return 'dry-run';
 }
 
-function clientFrom(args: Arguments): AdminClient {
-  const store = oneValue(args, 'store', true);
-  // guarddog: documented auth input, read here only to reach the store the user named.
-  const token = process.env.SHOPIFY_ADMIN_ACCESS_TOKEN ?? '';
-  return new AdminClient({
-    store,
-    token,
-    apiVersion: oneValue(args, 'api-version', false) ?? DEFAULT_API_VERSION,
-  });
+async function storeTargets(args: Arguments): Promise<StoreTarget[]> {
+  const targets = new Map<string, StoreTarget>();
+  for (const store of values(args, 'store')) targets.set(store.toLowerCase(), { store, explicit: true });
+  const sweep = oneValue(args, 'stores-from', false);
+  if (sweep !== undefined) {
+    const text = await readFile(resolve(process.cwd(), sweep), 'utf8');
+    for (const line of text.split('\n')) {
+      const store = (line.split('#')[0] ?? '').trim().toLowerCase();
+      if (store.length > 0 && !targets.has(store)) targets.set(store, { store, explicit: false });
+    }
+  }
+  if (targets.size === 0) throw new Error('--store or --stores-from is required');
+  return [...targets.values()];
+}
+
+function connectorFrom(args: Arguments, storeCount: number): Connect {
+  const apiVersion = oneValue(args, 'api-version', false) ?? DEFAULT_API_VERSION;
+  // guarddog: the three documented auth inputs, read here only to reach the named stores.
+  const clientId = oneValue(args, 'client-id', false) ?? process.env.SHOPIFY_APP_CLIENT_ID ?? '';
+  const clientSecret = process.env.SHOPIFY_APP_SECRET ?? ''; // guarddog: see above
+  const token = process.env.SHOPIFY_ADMIN_ACCESS_TOKEN ?? ''; // guarddog: see above
+  if (clientId.length > 0 && clientSecret.length > 0) {
+    return async (store) => new AdminClient({
+      store,
+      apiVersion,
+      token: await mintAccessToken({ store, clientId, clientSecret }),
+    });
+  }
+  // Incomplete app credentials fall back rather than fail: a stray SHOPIFY_APP_CLIENT_ID in a
+  // CI image must not break a command a static token can serve on its own.
+  if (token.length > 0 && storeCount === 1) {
+    return async (store) => new AdminClient({ store, token, apiVersion });
+  }
+  if (clientId.length > 0 || clientSecret.length > 0) {
+    throw new Error('app auth needs both --client-id (or SHOPIFY_APP_CLIENT_ID) and SHOPIFY_APP_SECRET');
+  }
+  if (token.length === 0) {
+    throw new Error('set SHOPIFY_ADMIN_ACCESS_TOKEN, or SHOPIFY_APP_CLIENT_ID and SHOPIFY_APP_SECRET');
+  }
+  throw new Error('SHOPIFY_ADMIN_ACCESS_TOKEN reaches one store; a fleet needs SHOPIFY_APP_CLIENT_ID and SHOPIFY_APP_SECRET');
+}
+
+async function clientFrom(args: Arguments): Promise<AdminClient> {
+  return connectorFrom(args, 1)(oneValue(args, 'store', true));
 }
 
 function values(args: Arguments, name: string): string[] {
@@ -245,16 +291,29 @@ function output(args: Arguments, json: unknown, text: string): void {
   process.stdout.write(args.flags.has('json') ? stringifyCanonical(json) : text);
 }
 
-function renderPlan(plan: Plan, applied: string[]): string {
+function renderFleet(result: FleetResult): string {
   const lines: string[] = [];
-  for (const item of plan.items) {
-    lines.push(`${item.status} ${item.identity}`);
-    for (const reason of item.reasons) lines.push(`  ${reason}`);
-    for (const notice of item.notices) lines.push(`NOTICE ${notice}`);
+  for (const outcome of result.stores) {
+    if (outcome.status !== 'planned') {
+      const label = outcome.status === 'not-installed' ? 'NOT-INSTALLED' : 'UNREACHABLE';
+      lines.push(`${label} ${outcome.store} ${outcome.code ?? 'error'}: ${outcome.reason ?? ''}`.trimEnd());
+      continue;
+    }
+    lines.push(`STORE ${outcome.store}`);
+    for (const item of outcome.plan?.items ?? []) lines.push(...renderItem(item));
+    for (const identity of outcome.applied ?? []) lines.push(`APPLIED ${identity}`);
+    if (outcome.refused !== undefined) lines.push(`REFUSED ${outcome.store}: ${outcome.refused}`);
   }
-  for (const identity of applied) lines.push(`APPLIED ${identity}`);
   lines.push('');
   return lines.join('\n');
+}
+
+function renderItem(item: PlanItem): string[] {
+  return [
+    `${item.status} ${item.identity}`,
+    ...item.reasons.map((reason) => `  ${reason}`),
+    ...item.notices.map((notice) => `NOTICE ${notice}`),
+  ];
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -275,6 +334,7 @@ async function help(): Promise<string> {
 Usage:
   metafields <schema.ts> --validate
   metafields <schema.ts> --store <store.myshopify.com> [--apply | --check] [--json]
+  metafields <schema.ts> --store <a> --store <b> --stores-from <stores.txt> [--apply]
   metafields pull --store <store.myshopify.com> --owner <owner> --namespace <namespace>
                   [--metaobjects] [--out <schema.ts>]
   metafields compile <schema-or-migration.ts> [--out <compiled.json>]
@@ -283,12 +343,18 @@ Usage:
                      [--apply | --check] [--json]
 
 Options:
+  --store <host>           Target store; repeat for a fleet
+  --stores-from <file>     Sweep the stores listed one per line, '#' comments allowed
+  --client-id <id>         App client id (default: SHOPIFY_APP_CLIENT_ID)
   --api-version <YYYY-MM>  Shopify Admin API version (default: ${DEFAULT_API_VERSION})
   --all-owners             Pull every supported owner type
   --all-namespaces         Pull every merchant-owned namespace
   --liquid                 Emit Liquid editor metafield definitions
   --help                   Show help
   --version                Show version
+
+Auth reads SHOPIFY_APP_CLIENT_ID and SHOPIFY_APP_SECRET to mint a short-lived Admin token
+per store, or SHOPIFY_ADMIN_ACCESS_TOKEN for a single store.
 `;
 }
 
