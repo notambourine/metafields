@@ -4,8 +4,8 @@ import {
   type RawMetafield, type RawMetaobject,
 } from './admin-shapes.js';
 import type { PulledSchema } from './generator.js';
-import type { ExistingField, ExistingMetaobject } from './planner.js';
-import { toPortableValidations } from './references.js';
+import type { ExistingMetaobject } from './planner.js';
+import { toPortableField } from './references.js';
 import { isReservedNamespace, OWNER_TYPES, type Owner } from './schema.js';
 
 interface Connection<T> {
@@ -85,15 +85,11 @@ export async function pullSchema(client: AdminClient, options: PullOptions): Pro
   return {
     metaobjects: metaobjects.map((definition) => ({
       ...definition,
-      fields: definition.fields.map((field) => portable(field, typeById)),
+      fields: definition.fields.map((field) => toPortableField(field, typeById)),
     })),
-    metafields: metafields.map((definition) => portable(definition, typeById)),
+    metafields: metafields.map((definition) => toPortableField(definition, typeById)),
     excluded,
   };
-}
-
-function portable<T extends ExistingField>(field: T, typeById: ReadonlyMap<string, string>): T {
-  return { ...field, validations: toPortableValidations(field.validations, typeById) };
 }
 
 const METAFIELD_DEFINITIONS_QUERY = `

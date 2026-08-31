@@ -11,7 +11,7 @@ import { exitCodeForPlan, planFrom, planSchema } from './planner.js';
 import {
   changedPaths, classifyDrift, deferred, written, type DriftItem, type DriftPlan,
 } from './changes.js';
-import { toPortableValidations, toStoreField, toStoreMetaobject } from './references.js';
+import { toPortableField, toStoreField, toStoreMetaobject } from './references.js';
 
 export const DEFAULT_API_VERSION = '2026-07';
 
@@ -184,7 +184,7 @@ export class AdminClient {
   // A stored reference names an id, a schema names a type. Comparing and regenerating both happen
   // against the schema's vocabulary, so a read answers in it.
   #portable<T extends ExistingField>(field: T): T {
-    return { ...field, validations: toPortableValidations(field.validations, this.#typeById) };
+    return toPortableField(field, this.#typeById);
   }
 
   // References are resolved before the input builders run, so those stay a plain projection.

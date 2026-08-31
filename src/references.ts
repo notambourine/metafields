@@ -54,7 +54,14 @@ export function toStoreMetaobject<T extends { fields: readonly { validations: re
   return { ...definition, fields: definition.fields.map((field) => toStoreField(field, idByType)) };
 }
 
-export function toPortableValidations(
+export function toPortableField<T extends { validations?: readonly Validation[] | undefined }>(
+  field: T,
+  typeById: ReadonlyMap<string, string>,
+): T {
+  return { ...field, validations: toPortableValidations(field.validations, typeById) };
+}
+
+function toPortableValidations(
   validations: readonly Validation[] = [],
   typeById: ReadonlyMap<string, string>,
 ): Validation[] {
