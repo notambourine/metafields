@@ -1,7 +1,7 @@
 # @notambourine/metafields
 
 Declare Shopify metafield and metaobject definitions in TypeScript, inspect store drift, and apply
-safe changes. The CLI never deletes or retypes a definition.
+controlled changes. The CLI never deletes or retypes a definition.
 
 Requires Node.js 22.18 or newer.
 
@@ -119,9 +119,9 @@ npx @notambourine/metafields ./schema.ts \
   --store flagship.myshopify.com --stores-from ./stores.txt --apply
 ```
 
-Each store receives the same plan. One store refusing a write does not stop the others. A store
-named directly fails loudly; a swept store without the app is reported as `NOT-INSTALLED` without
-failing the fleet. Other unreachable stores and rejected writes exit `2`.
+Each store is planned against the same schema. One store refusing a write does not stop the others.
+A store named directly fails loudly; a swept store without the app is reported as `NOT-INSTALLED`
+without failing the fleet. Other unreachable stores and rejected writes exit `2`.
 
 ## Pull and generated output
 
@@ -202,7 +202,7 @@ metafield type table matches it. It needs no store or credentials.
 
 ```sh
 npx @notambourine/metafields doctor
-npx @notambourine/metafields doctor --api-version 2025-10 --json
+npx @notambourine/metafields doctor --api-version 2026-07 --json
 ```
 
 An unsupported version or changed type table is a failed check. An unreachable Shopify registry is

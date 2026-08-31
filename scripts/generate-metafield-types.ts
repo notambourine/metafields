@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-// Generates checked-in type metadata through the same built registry client used by doctor.
-// Exit 1 means stale; exit 2 means the registry was unavailable or the API pin expired.
+// Run against dist so generation and doctor share one registry client; scripts cannot import
+// src under Node's type-stripping constraints.
 
 import { readFile, writeFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
