@@ -79,7 +79,7 @@ function normalizedValue(validation: { name: string; value: string }): string {
       return validation.value;
     }
   }
-  if (validation.name === 'json_schema') {
+  if (validation.name === 'schema') {
     try {
       return JSON.stringify(sortJson(JSON.parse(validation.value) as unknown));
     } catch {

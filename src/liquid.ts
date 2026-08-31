@@ -1,3 +1,4 @@
+import { METAFIELD_TYPES } from './metafield-types.js';
 import type { CompiledSchema, Owner } from './schema.js';
 
 // The Liquid language server groups definitions by these handles and has none for
@@ -15,25 +16,6 @@ const LIQUID_OWNERS = {
   product_variant: 'variant',
   shop: 'shop',
 } as const satisfies Partial<Record<Owner, string>>;
-
-// Categories follow the published type list. The language server reads only type.name,
-// so a category is descriptive rather than load bearing.
-const TYPE_CATEGORIES: Record<string, string> = {
-  single_line_text_field: 'TEXT',
-  multi_line_text_field: 'TEXT',
-  rich_text_field: 'TEXT',
-  number_integer: 'NUMBER',
-  number_decimal: 'NUMBER',
-  boolean: 'TRUE_FALSE',
-  url: 'URL',
-  json: 'JSON',
-  product_reference: 'REFERENCE',
-  variant_reference: 'REFERENCE',
-  collection_reference: 'REFERENCE',
-  file_reference: 'REFERENCE',
-  metaobject_reference: 'REFERENCE',
-  mixed_reference: 'REFERENCE',
-};
 
 export interface LiquidMetafield {
   key: string;
@@ -70,9 +52,13 @@ export function emitLiquidMetafields(schema: CompiledSchema): LiquidEmit {
   return { definitions, skipped };
 }
 
+// Categories come from Shopify's own type list. The language server reads only type.name, so a
+// category is descriptive rather than load bearing; a type Shopify does not publish is the
+// interesting case, and UNKNOWN is how it shows up in the emitted file.
 function categoryOf(type: string): string {
   const base = type.startsWith('list.') ? type.slice('list.'.length) : type;
-  return TYPE_CATEGORIES[base] ?? 'UNKNOWN';
+  const types: Record<string, { category: string } | undefined> = METAFIELD_TYPES;
+  return (types[type] ?? types[base])?.category ?? 'UNKNOWN';
 }
 
 export function isLiquidMetafieldsFile(value: unknown): boolean {

@@ -29,7 +29,7 @@ function options(field: ExistingMetafield | ExistingMetaobject['fields'][number]
   if (regex !== undefined) result.push(`regex: ${quote(regex)}`);
   const choices = validationMap.get('choices');
   if (choices !== undefined) result.push(`choices: ${choices}`);
-  const jsonSchema = validationMap.get('json_schema');
+  const jsonSchema = validationMap.get('schema');
   if (jsonSchema !== undefined) result.push(`schema: ${jsonSchema}`);
   if (!metaobjectField && 'access' in field && field.access) {
     const access = Object.entries(field.access)

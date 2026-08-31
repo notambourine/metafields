@@ -10,6 +10,7 @@ export { readAppConfig } from './app-config.js';
 export { fleetExitCode, synchronizeFleet } from './fleet.js';
 export { blockedAdvice, classifyDrift, deferred, written } from './changes.js';
 export { DESCRIPTION_MAX_LENGTH, descriptionViolations } from './limits.js';
+export { METAFIELD_OWNER_TYPES, METAFIELD_TYPES } from './metafield-types.js';
 export type {
   CollectionReference,
   Decimal,
@@ -23,6 +24,7 @@ export type {
   VariantReference,
 } from './types.js';
 export type { CompiledSchema, Owner } from './schema.js';
+export type { MetafieldOwnerType, MetafieldTypeInfo, MetafieldTypeName } from './metafield-types.js';
 export type { LiquidEmit, LiquidMetafield, LiquidMetafields } from './liquid.js';
 export type { CompiledMigration, MigrationResult } from './migration.js';
 export type { ExistingSchema, Plan, PlanItem, SyncMode } from './planner.js';
