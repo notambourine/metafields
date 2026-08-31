@@ -1,10 +1,16 @@
+import {
+  mapMetafield, mapMetaobject, METAFIELD_SELECTION, METAOBJECT_SELECTION,
+  type RawMetafield, type RawMetaobject,
+} from './admin-shapes.js';
 import { assertDescriptionLengths } from './limits.js';
 import type { CanonicalField, CanonicalMetafield, CanonicalMetaobject, CompiledSchema } from './schema.js';
 import type {
   ExistingField, ExistingMetafield, ExistingMetaobject, ExistingSchema, Plan, SyncMode,
 } from './planner.js';
-import { exitCodeForPlan, planSchema } from './planner.js';
-import { attribute, repairedIdentities, type RepairItem, type RepairPlan } from './repair.js';
+import { exitCodeForPlan, planFrom, planSchema } from './planner.js';
+import {
+  changedPaths, classifyDrift, deferred, written, type DriftItem, type DriftPlan,
+} from './changes.js';
 
 export const DEFAULT_API_VERSION = '2026-07';
 
@@ -32,10 +38,21 @@ export function redactSecrets(message: string): string {
   return message.replace(/shp(at|ca|pa|ss|us)_[A-Za-z0-9_-]+/g, '[REDACTED]');
 }
 
+interface GraphqlError {
+  message: string;
+  extensions?: { code?: string };
+}
+
 interface GraphqlEnvelope<T> {
   data?: T;
-  errors?: { message: string }[];
+  errors?: GraphqlError[];
   extensions?: { cost?: { throttleStatus?: { currentlyAvailable?: number; restoreRate?: number } } };
+}
+
+// A rate limit arrives as HTTP 200 carrying this code, so it never reaches the status checks.
+// MAX_COST_EXCEEDED is deliberately not throttling: that query costs too much every time.
+function isThrottled(errors: readonly GraphqlError[]): boolean {
+  return errors.some((error) => error.extensions?.code === 'THROTTLED' || /^throttled$/i.test(error.message.trim()));
 }
 
 export interface AdminClientOptions {
@@ -73,7 +90,10 @@ export class AdminClient {
   }
 
   async request<T>(query: string, variables: Record<string, unknown> = {}, mutation = false): Promise<T> {
-    const attempts = mutation ? 1 : this.#retries + 1;
+    // A timeout or 5xx may have landed, but Shopify rejects THROTTLED before execution.
+    // Retry only the latter to avoid duplicate creates.
+    const attempts = this.#retries + 1;
+    const retriesTransient = !mutation;
     let lastError: unknown;
     for (let attempt = 0; attempt < attempts; attempt += 1) {
       try {
@@ -88,7 +108,7 @@ export class AdminClient {
         });
         const requestId = response.headers.get('x-request-id') ?? undefined;
         if (!response.ok) {
-          const retryable = response.status === 429 || response.status >= 500;
+          const retryable = retriesTransient && (response.status === 429 || response.status >= 500);
           if (retryable && attempt + 1 < attempts) {
             await delay(backoff(attempt, response.headers.get('retry-after')));
             continue;
@@ -97,8 +117,7 @@ export class AdminClient {
         }
         const envelope = await response.json() as GraphqlEnvelope<T>;
         if (envelope.errors?.length) {
-          const throttled = envelope.errors.some((error) => /throttled/i.test(error.message));
-          if (throttled && attempt + 1 < attempts) {
+          if (isThrottled(envelope.errors) && attempt + 1 < attempts) {
             await delay(backoff(attempt));
             continue;
           }
@@ -108,7 +127,7 @@ export class AdminClient {
         return envelope.data;
       } catch (error) {
         lastError = error;
-        if (error instanceof AdminError || attempt + 1 >= attempts) throw redactError(error);
+        if (error instanceof AdminError || !retriesTransient || attempt + 1 >= attempts) throw redactError(error);
         await delay(backoff(attempt));
       }
     }
@@ -152,44 +171,46 @@ export class AdminClient {
     const data = await this.request<{
       metaobjectDefinitionCreate: { metaobjectDefinition: { id: string } | null; userErrors: UserError[] };
     }>(METAOBJECT_CREATE, { definition: metaobjectCreateInput(definition) }, true);
-    assertMutation(data.metaobjectDefinitionCreate, `metaobject:${definition.type}`);
+    const payload = data.metaobjectDefinitionCreate;
+    assertMutation(payload.metaobjectDefinition, payload.userErrors, `metaobject:${definition.type}`);
   }
 
   async createMetafield(definition: CanonicalMetafield): Promise<void> {
     const data = await this.request<{
       metafieldDefinitionCreate: { createdDefinition: { id: string } | null; userErrors: UserError[] };
     }>(METAFIELD_CREATE, { definition: metafieldCreateInput(definition) }, true);
-    assertMutation({
-      created: data.metafieldDefinitionCreate.createdDefinition,
-      userErrors: data.metafieldDefinitionCreate.userErrors,
-    }, `metafield:${definition.ownerType}:${definition.namespace}.${definition.key}`);
+    const payload = data.metafieldDefinitionCreate;
+    assertMutation(payload.createdDefinition, payload.userErrors,
+      `metafield:${definition.ownerType}:${definition.namespace}.${definition.key}`);
   }
 
-  async repairMetaobject(entry: RepairItem): Promise<void> {
+  async updateMetaobject(entry: DriftItem, force = false): Promise<void> {
     const data = await this.request<{
       metaobjectDefinitionUpdate: { metaobjectDefinition: { id: string } | null; userErrors: UserError[] };
     }>(METAOBJECT_UPDATE, {
       id: entry.item.existing?.id,
-      definition: metaobjectUpdateInput(entry),
+      definition: metaobjectUpdateInput(entry, force),
     }, true);
-    assertMutation(data.metaobjectDefinitionUpdate, entry.item.identity);
+    const payload = data.metaobjectDefinitionUpdate;
+    assertMutation(payload.metaobjectDefinition, payload.userErrors, entry.item.identity);
   }
 
-  async repairMetafield(entry: RepairItem): Promise<void> {
+  async updateMetafield(entry: DriftItem, force = false): Promise<void> {
     const data = await this.request<{
       metafieldDefinitionUpdate: { updatedDefinition: { id: string } | null; userErrors: UserError[] };
-    }>(METAFIELD_UPDATE, { definition: metafieldUpdateInput(entry) }, true);
-    assertMutation({
-      created: data.metafieldDefinitionUpdate.updatedDefinition,
-      userErrors: data.metafieldDefinitionUpdate.userErrors,
-    }, entry.item.identity);
+    }>(METAFIELD_UPDATE, { definition: metafieldUpdateInput(entry, force) }, true);
+    const payload = data.metafieldDefinitionUpdate;
+    assertMutation(payload.updatedDefinition, payload.userErrors, entry.item.identity);
   }
 }
 
 export interface ApplyResult {
   plan: Plan;
-  applied: string[];
-  repaired: string[];
+  created: string[];
+  updated: string[];
+  // Definitions this run deliberately left alone, whole: they need `--force`, or nothing reaches
+  // them. Skipping some does not stop the rest, which is what keeps a fleet uniform.
+  skipped: string[];
 }
 
 export async function planStore(client: AdminClient, schema: CompiledSchema): Promise<Plan> {
@@ -200,63 +221,69 @@ export async function applyPlan(
   client: AdminClient,
   schema: CompiledSchema,
   plan: Plan,
-  repair?: RepairPlan,
+  drift: DriftPlan,
+  force = false,
 ): Promise<ApplyResult> {
-  const applied: string[] = [];
-  const repaired: string[] = [];
+  const created: string[] = [];
+  const updated: string[] = [];
+  const skipped = deferred(drift, force).map((entry) => entry.item.identity);
   try {
-    // Repairs run before creates so a metaobject a new metafield references is already correct.
-    for (const entry of repair ? repairedIdentities(repair) : []) {
-      if (entry.item.kind === 'metaobject') await client.repairMetaobject(entry);
-      else await client.repairMetafield(entry);
-      repaired.push(entry.item.identity);
+    // Updates run before creates so a metaobject a new metafield references is already correct.
+    for (const entry of written(drift, force)) {
+      if (entry.item.kind === 'metaobject') await client.updateMetaobject(entry, force);
+      else await client.updateMetafield(entry, force);
+      updated.push(entry.item.identity);
     }
     for (const item of plan.items.filter((value) => value.kind === 'metaobject' && value.status === 'CREATE')) {
       await client.createMetaobject(item.desired as CanonicalMetaobject);
-      applied.push(item.identity);
+      created.push(item.identity);
     }
     for (const item of plan.items.filter((value) => value.kind === 'metafield' && value.status === 'CREATE')) {
       await client.createMetafield(item.desired as CanonicalMetafield);
-      applied.push(item.identity);
+      created.push(item.identity);
     }
   } catch (error) {
     const landed = [
-      ...repaired.map((identity) => `repaired ${identity}`),
-      ...applied.map((identity) => `created ${identity}`),
+      ...updated.map((identity) => `updated ${identity}`),
+      ...created.map((identity) => `created ${identity}`),
     ];
     const trail = landed.length > 0 ? `; before failure: ${landed.join(', ')}` : '';
     throw new AdminError(`${error instanceof Error ? error.message : String(error)}${trail}`);
   }
   const after = planSchema(schema, await client.readSchema(schema));
-  if (exitCodeForPlan(after, 'check') !== 0) {
-    throw new AdminError(`post-apply verification failed; created: ${applied.join(', ') || 'none'}`);
+  // Only the writes this run made have to have landed. Drift it chose to skip is expected to
+  // still be there, and reporting it as a failed verification would hide a real one.
+  const attempted = planFrom(after.items.filter((item) => !skipped.includes(item.identity)));
+  if (exitCodeForPlan(attempted) !== 0) {
+    throw new AdminError(`post-apply verification failed; created: ${created.join(', ') || 'none'}`);
   }
-  return { plan: after, applied, repaired };
+  return { plan: after, created, updated, skipped };
 }
 
 export async function synchronize(
   client: AdminClient,
   schema: CompiledSchema,
   mode: SyncMode,
+  force = false,
 ): Promise<ApplyResult> {
   assertDescriptionLengths(schema);
   const before = await planStore(client, schema);
-  if (mode !== 'apply' || exitCodeForPlan(before, mode) !== 0) {
-    return { plan: before, applied: [], repaired: [] };
+  const drift = classifyDrift(before);
+  if (mode !== 'apply') {
+    return { plan: before, created: [], updated: [], skipped: deferred(drift, force).map((entry) => entry.item.identity) };
   }
-  return applyPlan(client, schema, before);
+  return applyPlan(client, schema, before, drift, force);
 }
 
 interface UserError { field?: string[]; message: string; code?: string }
 
-function assertMutation(
-  payload: { metaobjectDefinition?: unknown; created?: unknown; userErrors: UserError[] },
-  identity: string,
-): void {
-  if (payload.userErrors.length > 0) {
-    throw new AdminError(`${identity}: ${payload.userErrors.map((error) => error.message).join('; ')}`);
+// Each mutation names its payload field differently, so the caller passes the definition it
+// found rather than a shape this has to know about.
+function assertMutation(definition: unknown, userErrors: UserError[], identity: string): void {
+  if (userErrors.length > 0) {
+    throw new AdminError(`${identity}: ${userErrors.map((error) => error.message).join('; ')}`);
   }
-  if (payload.metaobjectDefinition == null && payload.created == null) {
+  if (definition == null) {
     throw new AdminError(`${identity}: Shopify returned no created definition`);
   }
 }
@@ -277,18 +304,17 @@ function metafieldCreateInput(definition: CanonicalMetafield): Record<string, un
   return input;
 }
 
-// `--repair` only ever sends the attributes the plan reported as drifted, so an update never
-// carries an opinion about something the operator did not declare.
-function metafieldUpdateInput(entry: RepairItem): Record<string, unknown> {
+// An update only ever sends the attributes the plan reported as drifted, so it never carries an
+// opinion about something the operator did not declare.
+function metafieldUpdateInput(entry: DriftItem, force: boolean): Record<string, unknown> {
   const definition = entry.item.desired as CanonicalMetafield;
-  const paths = entry.repairs.map((reason) => attribute(entry.item, reason));
+  const paths = changedPaths(entry, force);
   const input: Record<string, unknown> = {
     ownerType: definition.ownerType,
     namespace: definition.namespace,
     key: definition.key,
-    name: definition.name,
   };
-  if (definition.description !== undefined) input.description = definition.description;
+  addLabels(input, paths, definition);
   if (paths.includes('validations differ')) input.validations = definition.validations;
   if (paths.some((path) => path.startsWith('access.')) && definition.access) input.access = definition.access;
   if (paths.some((path) => path.startsWith('capabilities.')) && definition.capabilities) {
@@ -315,10 +341,11 @@ function constraintsUpdateInput(
   return definition.constraints ? { key: definition.constraints.key, values } : { key: null, values };
 }
 
-function metaobjectUpdateInput(entry: RepairItem): Record<string, unknown> {
+function metaobjectUpdateInput(entry: DriftItem, force: boolean): Record<string, unknown> {
   const definition = entry.item.desired as CanonicalMetaobject;
-  const paths = entry.repairs.map((reason) => attribute(entry.item, reason));
+  const paths = changedPaths(entry, force);
   const input: Record<string, unknown> = {};
+  addLabels(input, paths, definition);
   if (paths.some((path) => path.startsWith('displayNameKey')) && definition.displayNameKey !== undefined) {
     input.displayNameKey = definition.displayNameKey;
   }
@@ -348,6 +375,19 @@ function metaobjectUpdateInput(entry: RepairItem): Record<string, unknown> {
   }
   if (operations.length > 0) input.fieldDefinitions = operations;
   return input;
+}
+
+// Both are labels, so both are sent only when the plan reported them drifted; an unchanged name
+// is the same no-op either way, and an update to something else never rewrites one silently.
+function addLabels(
+  input: Record<string, unknown>,
+  paths: readonly string[],
+  definition: { name: string; description?: string },
+): void {
+  if (paths.includes('name differs')) input.name = definition.name;
+  if (paths.includes('description differs') && definition.description !== undefined) {
+    input.description = definition.description;
+  }
 }
 
 function fieldCreateInput(field: CanonicalField): Record<string, unknown> {
@@ -380,78 +420,6 @@ function capabilityInput(capabilities: Record<string, boolean>): Record<string, 
   return Object.fromEntries(Object.entries(capabilities).map(([key, enabled]) => [key, { enabled }]));
 }
 
-interface RawField {
-  key: string;
-  name: string;
-  description?: string | null;
-  type: { name: string };
-  required?: boolean;
-  validations: { name: string; value: string }[];
-}
-interface RawMetaobject {
-  id: string;
-  type: string;
-  name: string;
-  description?: string | null;
-  displayNameKey?: string | null;
-  access: Record<string, string | null>;
-  capabilities: { publishable: { enabled: boolean }; translatable: { enabled: boolean } };
-  fieldDefinitions: RawField[];
-}
-interface RawMetafield extends RawField {
-  id: string;
-  namespace: string;
-  ownerType: string;
-  access: Record<string, string | null>;
-  capabilities: Record<string, { enabled: boolean }>;
-  constraints?: { key: string | null; values: { nodes: { value: string }[] } } | null;
-  validationStatus: ExistingMetafield['validationStatus'];
-  invalidCount: number;
-}
-
-function mapField(field: RawField) {
-  return {
-    key: field.key,
-    name: field.name,
-    description: field.description,
-    type: field.type,
-    required: field.required,
-    validations: field.validations,
-  };
-}
-
-function mapMetaobject(value: RawMetaobject): ExistingMetaobject {
-  return {
-    id: value.id,
-    type: value.type,
-    name: value.name,
-    description: value.description,
-    displayNameKey: value.displayNameKey,
-    access: value.access,
-    capabilities: {
-      publishable: value.capabilities.publishable.enabled,
-      translatable: value.capabilities.translatable.enabled,
-    },
-    fields: value.fieldDefinitions.map(mapField),
-  };
-}
-
-function mapMetafield(value: RawMetafield): ExistingMetafield {
-  return {
-    ...mapField(value),
-    id: value.id,
-    namespace: value.namespace,
-    ownerType: value.ownerType,
-    access: value.access,
-    capabilities: Object.fromEntries(Object.entries(value.capabilities).map(([key, item]) => [key, item.enabled])),
-    constraints: value.constraints
-      ? { key: value.constraints.key, values: value.constraints.values.nodes.map((item) => item.value) }
-      : null,
-    validationStatus: value.validationStatus,
-    invalidCount: value.invalidCount,
-  };
-}
-
 function redactError(error: unknown): Error {
   if (error instanceof AdminError) return error;
   return new AdminError(error instanceof Error ? error.message : String(error));
@@ -467,39 +435,16 @@ function delay(milliseconds: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 
-const FIELD_SELECTION = `
-  key name description type { name } required validations { name value }
-`;
-
 const METAOBJECT_QUERY = `
 query MetaobjectDefinition($type: String!) {
-  metaobjectDefinitionByType(type: $type) {
-    id type name description displayNameKey
-    access { admin storefront }
-    capabilities { publishable { enabled } translatable { enabled } }
-    fieldDefinitions { ${FIELD_SELECTION} }
-  }
+  metaobjectDefinitionByType(type: $type) { ${METAOBJECT_SELECTION} }
 }`;
 
 // Owner, namespace and key travel in `identifier`, never as top-level arguments: the only other
 // selector is `id`, which is deprecated and which a schema-first tool has no way to know.
 const METAFIELD_QUERY = `
 query MetafieldDefinition($identifier: MetafieldDefinitionIdentifierInput!) {
-  metafieldDefinition(identifier: $identifier) {
-    id namespace key ownerType name description type { name }
-    validations { name value }
-    access { admin storefront customerAccount }
-    capabilities {
-      adminFilterable { enabled }
-      analyticsQueryable { enabled }
-      cartToOrderCopyable { enabled }
-      smartCollectionCondition { enabled }
-      uniqueValues { enabled }
-    }
-    constraints { key values(first: 250) { nodes { value } } }
-    validationStatus
-    invalidCount: metafieldsCount(validationStatus: INVALID)
-  }
+  metafieldDefinition(identifier: $identifier) { ${METAFIELD_SELECTION} }
 }`;
 
 const METAOBJECT_CREATE = `
@@ -518,7 +463,7 @@ mutation CreateMetafieldDefinition($definition: MetafieldDefinitionInput!) {
   }
 }`;
 
-// Neither update carries a `delete` field operation or a `type`: a repair rewrites shape the
+// Neither update carries a `delete` field operation or a `type`: an update rewrites shape the
 // operator declared and nothing else.
 const METAOBJECT_UPDATE = `
 mutation UpdateMetaobjectDefinition($id: ID!, $definition: MetaobjectDefinitionUpdateInput!) {

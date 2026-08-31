@@ -43,7 +43,7 @@ export interface ExistingSchema {
 
 export type PlanStatus = 'CREATE' | 'PRESENT' | 'CONFLICT' | 'INDETERMINATE';
 
-export type SyncMode = 'dry-run' | 'check' | 'apply';
+export type SyncMode = 'dry-run' | 'apply';
 
 export interface PlanItem {
   kind: 'metaobject' | 'metafield';
@@ -52,8 +52,8 @@ export interface PlanItem {
   reasons: string[];
   notices: string[];
   desired: CanonicalMetaobject | CanonicalMetafield;
-  // What the store has today. `--repair` needs the metaobject id to update against and the
-  // stored constraint values to delete, neither of which a reason string can carry.
+  // What the store has today. An update needs the metaobject id to write against and the
+  // stored constraint values to diff, neither of which a reason string can carry.
   existing?: ExistingMetaobject | ExistingMetafield;
 }
 
@@ -79,7 +79,7 @@ function normalizedValue(validation: { name: string; value: string }): string {
       return validation.value;
     }
   }
-  if (validation.name === 'json_schema') {
+  if (validation.name === 'schema') {
     try {
       return JSON.stringify(sortJson(JSON.parse(validation.value) as unknown));
     } catch {
@@ -240,8 +240,10 @@ export function planFrom(items: PlanItem[]): Plan {
   };
 }
 
-export function exitCodeForPlan(plan: Plan, mode: SyncMode): number {
+// Exit describes remaining store drift in every mode, so --dry-run preserves CI semantics.
+// Cosmetic notices are not drift.
+export function exitCodeForPlan(plan: Plan): number {
   if (plan.indeterminate > 0) return 2;
-  if (plan.conflicts > 0 || (mode === 'check' && plan.creates > 0)) return 1;
+  if (plan.conflicts > 0 || plan.creates > 0) return 1;
   return 0;
 }

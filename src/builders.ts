@@ -29,7 +29,7 @@ import {
 
 type RequiredFlag<O> = O extends { readonly required: true } ? true : false;
 
-function validations(options: Record<string, unknown>, numeric = false): Validation[] {
+function validations(options: Record<string, unknown>): Validation[] {
   const result: Validation[] = [];
   for (const name of ['min', 'max', 'regex'] as const) {
     const value = options[name];
@@ -39,7 +39,7 @@ function validations(options: Record<string, unknown>, numeric = false): Validat
     result.push({ name: 'choices', value: JSON.stringify(options.choices) });
   }
   if (options.schema !== undefined) {
-    result.push({ name: 'json_schema', value: JSON.stringify(options.schema) });
+    result.push({ name: 'schema', value: JSON.stringify(options.schema) });
   }
   return result;
 }

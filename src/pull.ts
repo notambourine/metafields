@@ -1,41 +1,15 @@
 import type { AdminClient } from './admin.js';
+import {
+  mapMetafield, mapMetaobject, METAFIELD_SELECTION, METAOBJECT_SELECTION,
+  type RawMetafield, type RawMetaobject,
+} from './admin-shapes.js';
 import type { PulledSchema } from './generator.js';
-import type { ExistingField, ExistingMetafield, ExistingMetaobject } from './planner.js';
+import type { ExistingMetaobject } from './planner.js';
 import { isReservedNamespace, OWNER_TYPES, type Owner } from './schema.js';
 
 interface Connection<T> {
   nodes: T[];
   pageInfo: { hasNextPage: boolean; endCursor: string | null };
-}
-
-interface RawField {
-  key: string;
-  name: string;
-  description?: string | null;
-  type: { name: string };
-  required?: boolean;
-  validations: { name: string; value: string }[];
-}
-
-interface RawMetafield extends RawField {
-  namespace: string;
-  ownerType: string;
-  access: Record<string, string | null>;
-  capabilities: Record<string, { enabled: boolean }>;
-  constraints?: { key: string | null; values: { nodes: { value: string }[] } } | null;
-  validationStatus: ExistingMetafield['validationStatus'];
-  invalidCount: number;
-}
-
-interface RawMetaobject {
-  id: string;
-  type: string;
-  name: string;
-  description?: string | null;
-  displayNameKey?: string | null;
-  access: Record<string, string | null>;
-  capabilities: { publishable: { enabled: boolean }; translatable: { enabled: boolean } };
-  fieldDefinitions: RawField[];
 }
 
 export interface PullOptions {
@@ -106,48 +80,6 @@ export async function pullSchema(client: AdminClient, options: PullOptions): Pro
   return { metaobjects, metafields, excluded };
 }
 
-function mapField(value: RawField): ExistingField {
-  return {
-    key: value.key,
-    name: value.name,
-    description: value.description,
-    type: value.type,
-    required: value.required,
-    validations: value.validations,
-  };
-}
-
-function mapMetafield(value: RawMetafield): ExistingMetafield {
-  return {
-    ...mapField(value),
-    namespace: value.namespace,
-    ownerType: value.ownerType,
-    access: value.access,
-    capabilities: Object.fromEntries(Object.entries(value.capabilities).map(([key, item]) => [key, item.enabled])),
-    constraints: value.constraints
-      ? { key: value.constraints.key, values: value.constraints.values.nodes.map((item) => item.value) }
-      : null,
-    validationStatus: value.validationStatus,
-    invalidCount: value.invalidCount,
-  };
-}
-
-function mapMetaobject(value: RawMetaobject): ExistingMetaobject {
-  return {
-    id: value.id,
-    type: value.type,
-    name: value.name,
-    description: value.description,
-    displayNameKey: value.displayNameKey,
-    access: value.access,
-    capabilities: {
-      publishable: value.capabilities.publishable.enabled,
-      translatable: value.capabilities.translatable.enabled,
-    },
-    fields: value.fieldDefinitions.map(mapField),
-  };
-}
-
 const METAFIELD_DEFINITIONS_QUERY = `
 query PullMetafieldDefinitions(
   $ownerType: MetafieldOwnerType!
@@ -155,21 +87,7 @@ query PullMetafieldDefinitions(
   $after: String
 ) {
   metafieldDefinitions(ownerType: $ownerType, namespace: $namespace, first: 100, after: $after) {
-    nodes {
-      namespace key ownerType name description type { name }
-      validations { name value }
-      access { admin storefront customerAccount }
-      capabilities {
-        adminFilterable { enabled }
-        analyticsQueryable { enabled }
-        cartToOrderCopyable { enabled }
-        smartCollectionCondition { enabled }
-        uniqueValues { enabled }
-      }
-      constraints { key values(first: 250) { nodes { value } } }
-      validationStatus
-      invalidCount: metafieldsCount(validationStatus: INVALID)
-    }
+    nodes { ${METAFIELD_SELECTION} }
     pageInfo { hasNextPage endCursor }
   }
 }`;
@@ -177,14 +95,7 @@ query PullMetafieldDefinitions(
 const METAOBJECT_DEFINITIONS_QUERY = `
 query PullMetaobjectDefinitions($after: String) {
   metaobjectDefinitions(first: 100, after: $after) {
-    nodes {
-      id type name description displayNameKey
-      access { admin storefront }
-      capabilities { publishable { enabled } translatable { enabled } }
-      fieldDefinitions {
-        key name description type { name } required validations { name value }
-      }
-    }
+    nodes { ${METAOBJECT_SELECTION} }
     pageInfo { hasNextPage endCursor }
   }
 }`;

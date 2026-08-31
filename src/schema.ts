@@ -1,14 +1,14 @@
+import type { MetafieldOwnerType } from './metafield-types.js';
 import {
   FIELD_MARKER,
   METAOBJECT_MARKER,
   SCHEMA_MARKER,
-  type FieldDefinition,
-  type SchemaDefinition,
   type Validation,
 } from './types.js';
 
 export { SCHEMA_MARKER } from './types.js';
 
+// Accept only merchant-owned custom-data handles while checking them against Shopify's enum.
 export const OWNER_TYPES = {
   article: 'ARTICLE',
   blog: 'BLOG',
@@ -23,7 +23,7 @@ export const OWNER_TYPES = {
   product: 'PRODUCT',
   product_variant: 'PRODUCTVARIANT',
   shop: 'SHOP',
-} as const;
+} as const satisfies Record<string, MetafieldOwnerType>;
 
 export type Owner = keyof typeof OWNER_TYPES;
 

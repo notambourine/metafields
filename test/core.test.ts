@@ -92,8 +92,7 @@ test('planner creates missing definitions and detects operational and cosmetic d
   const desired = compileSchema(schema());
   const absent = planSchema(desired, { metaobjects: [], metafields: [] });
   assert.equal(absent.creates, 3);
-  assert.equal(exitCodeForPlan(absent, 'dry-run'), 0);
-  assert.equal(exitCodeForPlan(absent, 'check'), 1);
+  assert.equal(exitCodeForPlan(absent), 1);
 
   const existing = {
     metaobjects: [{
@@ -127,7 +126,7 @@ test('planner treats stored-value validation states as conflict and indeterminat
   assert.equal(invalid.conflicts, 1);
   const pending = planSchema(desired, { metaobjects: [], metafields: [{ ...base, validationStatus: 'IN_PROGRESS' }] });
   assert.equal(pending.indeterminate, 1);
-  assert.equal(exitCodeForPlan(pending, 'check'), 2);
+  assert.equal(exitCodeForPlan(pending), 2);
 });
 
 test('loads a TypeScript schema module with Node type stripping', async () => {
@@ -170,8 +169,8 @@ test('liquid emit maps owner handles and drops owners the language server cannot
 test('CLI emit writes a metafields file and refuses to clobber unrelated content', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'metafields-emit-'));
   const target = join(directory, '.shopify', 'metafields.json');
-  const run = () => execFileAsync(process.execPath, [
-    './dist/cli.js', 'emit', './test/fixture-schema.ts', '--liquid', '--out', target,
+  const run = (...extra: string[]) => execFileAsync(process.execPath, [
+    './dist/cli.js', 'emit', './test/fixture-schema.ts', '--liquid', '--out', target, ...extra,
   ]);
   await run();
   const written = JSON.parse(await readFile(target, 'utf8')) as Record<string, unknown[]>;
@@ -179,6 +178,9 @@ test('CLI emit writes a metafields file and refuses to clobber unrelated content
   await run();
   await writeFile(target, 'theme source, not generated\n');
   await assert.rejects(run(), /is not a generated metafields file/);
+  // --force overrides the tool's own judgment here too, and needs no --apply to do it.
+  await run('--force');
+  assert.match(await readFile(target, 'utf8'), /faq_ref/);
 });
 
 test('migration artifacts are copy-only and checksum protected', () => {
@@ -206,6 +208,44 @@ test('CLI validates without store credentials and emits one JSON result', async 
   ]);
   assert.equal(stderr, '');
   assert.deepEqual(JSON.parse(stdout), { status: 'valid', metaobjects: 1, metafields: 1 });
+});
+
+test('CLI compile answers with one JSON object and refuses to clobber --out', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'metafields-compile-'));
+  const run = (...extra: string[]) => execFileAsync(process.execPath, [
+    './dist/cli.js', 'compile', './test/fixture-schema.ts', ...extra,
+  ]);
+  const format = '@notambourine/metafields/schema-v1';
+
+  const streamed = await run('--json');
+  assert.equal(streamed.stderr, '');
+  assert.equal((JSON.parse(streamed.stdout) as { compiled: { format: string } }).compiled.format, format);
+
+  const target = join(directory, 'compiled.json');
+  const written = await run('--out', target, '--json');
+  assert.deepEqual(JSON.parse(written.stdout), { status: 'written', out: target });
+  assert.equal((JSON.parse(await readFile(target, 'utf8')) as { format: string }).format, format);
+
+  const plain = join(directory, 'plain.json');
+  assert.equal((await run('--out', plain)).stdout, `WROTE ${plain}\n`);
+  await assert.rejects(run('--out', plain), /EEXIST/);
+});
+
+test('CLI emit puts left-out identities in the object under --json and on stderr without it', async () => {
+  const run = (...extra: string[]) => execFileAsync(process.execPath, [
+    './dist/cli.js', 'emit', './test/fixture-skipped.ts', '--liquid', ...extra,
+  ]);
+
+  const { stdout, stderr } = await run('--json');
+  assert.equal(stderr, '');
+  const envelope = JSON.parse(stdout) as { definitions: Record<string, { key: string }[]>; skipped: string[] };
+  assert.deepEqual(envelope.skipped, ['customer:custom.tier']);
+  assert.equal(envelope.definitions.product?.[0]?.key, 'blurb');
+
+  // Without --json the same identities leave stdout holding only the document.
+  const streamed = await run();
+  assert.equal(streamed.stderr, 'SKIPPED customer:custom.tier\n');
+  assert.deepEqual(Object.keys(JSON.parse(streamed.stdout) as object), ['product']);
 });
 
 test('CLI reports the package version', async () => {

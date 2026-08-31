@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import type { AdminClient } from './admin.js';
+import type { SyncMode } from './planner.js';
 import { OWNER_TYPES, stringifyCanonical, type Owner } from './schema.js';
 import { FIELD_MARKER, type FieldDefinition } from './types.js';
 
@@ -150,7 +151,7 @@ const ownerConnections: Partial<Record<Owner, { connection: string; graphType: s
 export async function runMigration(
   client: AdminClient,
   migration: CompiledMigration,
-  mode: 'dry-run' | 'check' | 'apply',
+  mode: SyncMode,
 ): Promise<MigrationResult> {
   assertCompiledMigration(migration);
   await verifyDefinitions(client, migration);
@@ -220,10 +221,10 @@ export async function runMigration(
   return result;
 }
 
-export function migrationExitCode(result: MigrationResult, mode: 'dry-run' | 'check' | 'apply'): number {
-  if (result.invalid > 0 || result.conflicts > 0) return 1;
-  if (mode === 'check' && result.pending > 0) return 1;
-  return 0;
+// Nonzero while rows are still pending, in every mode, the same way schema drift is: the code
+// describes the store, so appending --dry-run to the command CI runs gates on the same answer.
+export function migrationExitCode(result: MigrationResult): number {
+  return result.invalid > 0 || result.conflicts > 0 || result.pending > 0 ? 1 : 0;
 }
 
 async function verifyDefinitions(client: AdminClient, migration: CompiledMigration): Promise<void> {
