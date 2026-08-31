@@ -52,6 +52,9 @@ export interface PlanItem {
   reasons: string[];
   notices: string[];
   desired: CanonicalMetaobject | CanonicalMetafield;
+  // What the store has today. `--repair` needs the metaobject id to update against and the
+  // stored constraint values to delete, neither of which a reason string can carry.
+  existing?: ExistingMetaobject | ExistingMetafield;
 }
 
 export interface Plan {
@@ -188,6 +191,7 @@ export function planSchema(desired: CompiledSchema, existing: ExistingSchema): P
       reasons,
       notices: cosmeticNotices(identity, definition, found),
       desired: definition,
+      existing: found,
     });
   }
 
@@ -219,9 +223,14 @@ export function planSchema(desired: CompiledSchema, existing: ExistingSchema): P
       reasons,
       notices: cosmeticNotices(identity, definition, found),
       desired: definition,
+      existing: found,
     });
   }
 
+  return planFrom(items);
+}
+
+export function planFrom(items: PlanItem[]): Plan {
   return {
     items,
     creates: items.filter((item) => item.status === 'CREATE').length,

@@ -30,8 +30,8 @@ const valueOptions = new Set([
   'store', 'stores-from', 'client-id', 'api-version', 'owner', 'namespace', 'out',
 ]);
 const booleanOptions = new Set([
-  'apply', 'check', 'json', 'validate', 'metaobjects', 'all-owners', 'all-namespaces', 'liquid',
-  'help', 'version',
+  'apply', 'check', 'json', 'validate', 'repair', 'metaobjects', 'all-owners', 'all-namespaces',
+  'liquid', 'help', 'version',
 ]);
 
 async function main(argv: string[]): Promise<number> {
@@ -71,7 +71,9 @@ async function syncCommand(args: Arguments): Promise<number> {
   }
   const mode = modeFrom(args);
   const targets = await storeTargets(args);
-  const result = await synchronizeFleet(targets, schema, mode, connectorFrom(args, targets.length));
+  const result = await synchronizeFleet(targets, schema, mode, connectorFrom(args, targets.length), {
+    repair: args.flags.has('repair'),
+  });
   output(args, result, renderFleet(result));
   return fleetExitCode(result, mode);
 }
@@ -301,6 +303,13 @@ function renderFleet(result: FleetResult): string {
     }
     lines.push(`STORE ${outcome.store}`);
     for (const item of outcome.plan?.items ?? []) lines.push(...renderItem(item));
+    const repaired = new Set(outcome.repaired ?? []);
+    for (const entry of outcome.repair?.items ?? []) {
+      if (repaired.has(entry.item.identity)) { lines.push(`REPAIRED ${entry.item.identity}`); continue; }
+      const blocked = entry.blockers.length > 0;
+      lines.push(`${blocked ? 'UNREPAIRABLE' : 'REPAIR'} ${entry.item.identity}`);
+      for (const reason of blocked ? entry.blockers : entry.repairs) lines.push(`  ${reason}`);
+    }
     for (const identity of outcome.applied ?? []) lines.push(`APPLIED ${identity}`);
     if (outcome.refused !== undefined) lines.push(`REFUSED ${outcome.store}: ${outcome.refused}`);
   }
@@ -335,6 +344,7 @@ Usage:
   metafields <schema.ts> --validate
   metafields <schema.ts> --store <store.myshopify.com> [--apply | --check] [--json]
   metafields <schema.ts> --store <a> --store <b> --stores-from <stores.txt> [--apply]
+  metafields <schema.ts> --store <store.myshopify.com> --repair [--apply]
   metafields pull --store <store.myshopify.com> --owner <owner> --namespace <namespace>
                   [--metaobjects] [--out <schema.ts>]
   metafields compile <schema-or-migration.ts> [--out <compiled.json>]
@@ -346,6 +356,7 @@ Options:
   --store <host>           Target store; repeat for a fleet
   --stores-from <file>     Sweep the stores listed one per line, '#' comments allowed
   --client-id <id>         App client id (default: SHOPIFY_APP_CLIENT_ID)
+  --repair                 Update definitions whose drift is repairable; with --apply to write
   --api-version <YYYY-MM>  Shopify Admin API version (default: ${DEFAULT_API_VERSION})
   --all-owners             Pull every supported owner type
   --all-namespaces         Pull every merchant-owned namespace
