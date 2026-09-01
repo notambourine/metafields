@@ -9,6 +9,7 @@ export { GrantError, mintAccessToken } from './auth.js';
 export { readAppConfig } from './app-config.js';
 export { fleetExitCode, synchronizeFleet } from './fleet.js';
 export { blockedAdvice, classifyDrift, deferred, written } from './changes.js';
+export { renderFleet } from './render.js';
 export { DESCRIPTION_MAX_LENGTH, descriptionViolations } from './limits.js';
 export { METAFIELD_OWNER_TYPES, METAFIELD_TYPES } from './metafield-types.js';
 export { compareRegistry } from './type-check.js';
