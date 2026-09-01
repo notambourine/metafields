@@ -11,6 +11,7 @@ import { exitCodeForPlan, planFrom, planSchema } from './planner.js';
 import {
   changedPaths, classifyDrift, deferred, written, type DriftItem, type DriftPlan,
 } from './changes.js';
+import { toPortableField, toStoreField, toStoreMetaobject } from './references.js';
 
 export const DEFAULT_API_VERSION = '2026-07';
 
@@ -72,6 +73,10 @@ export class AdminClient {
   readonly #timeoutMs: number;
   readonly #retries: number;
   readonly #fetch: typeof globalThis.fetch;
+  // Every metaobject definition this client has read or created, both ways round: writes need the
+  // id a schema names by type, reads need the type behind the id Shopify returns.
+  readonly #idByType = new Map<string, string>();
+  readonly #typeById = new Map<string, string>();
 
   constructor(options: AdminClientOptions) {
     const store = normalizeStore(options.store);
@@ -153,7 +158,10 @@ export class AdminClient {
       METAOBJECT_QUERY,
       { type },
     );
-    return data.metaobjectDefinitionByType ? mapMetaobject(data.metaobjectDefinitionByType) : null;
+    if (!data.metaobjectDefinitionByType) return null;
+    const definition = mapMetaobject(data.metaobjectDefinitionByType);
+    this.#remember(definition.type, definition.id);
+    return { ...definition, fields: definition.fields.map((field) => this.#portable(field)) };
   }
 
   async readMetafield(definition: Pick<CanonicalMetafield, 'ownerType' | 'namespace' | 'key'>): Promise<ExistingMetafield | null> {
@@ -164,21 +172,47 @@ export class AdminClient {
         key: definition.key,
       },
     });
-    return data.metafieldDefinition ? mapMetafield(data.metafieldDefinition) : null;
+    return data.metafieldDefinition ? this.#portable(mapMetafield(data.metafieldDefinition)) : null;
+  }
+
+  #remember(type: string, id: string | undefined): void {
+    if (id === undefined) return;
+    this.#idByType.set(type, id);
+    this.#typeById.set(id, type);
+  }
+
+  // A stored reference names an id, a schema names a type. Comparing and regenerating both happen
+  // against the schema's vocabulary, so a read answers in it.
+  #portable<T extends ExistingField>(field: T): T {
+    return toPortableField(field, this.#typeById);
+  }
+
+  // References are resolved before the input builders run, so those stay a plain projection.
+  // Every referenced metaobject was read or created by now: creates precede updates.
+  #resolved(entry: DriftItem): DriftItem {
+    const desired = entry.item.kind === 'metaobject'
+      ? toStoreMetaobject(entry.item.desired as CanonicalMetaobject, this.#idByType)
+      : toStoreField(entry.item.desired as CanonicalMetafield, this.#idByType);
+    return { ...entry, item: { ...entry.item, desired } };
   }
 
   async createMetaobject(definition: CanonicalMetaobject): Promise<void> {
     const data = await this.request<{
-      metaobjectDefinitionCreate: { metaobjectDefinition: { id: string } | null; userErrors: UserError[] };
-    }>(METAOBJECT_CREATE, { definition: metaobjectCreateInput(definition) }, true);
+      metaobjectDefinitionCreate: {
+        metaobjectDefinition: { id: string; type: string } | null;
+        userErrors: UserError[];
+      };
+    }>(METAOBJECT_CREATE, { definition: metaobjectCreateInput(toStoreMetaobject(definition, this.#idByType)) }, true);
     const payload = data.metaobjectDefinitionCreate;
     assertMutation(payload.metaobjectDefinition, payload.userErrors, `metaobject:${definition.type}`);
+    // Metafields referencing this metaobject are created later in the same run, by type.
+    this.#remember(definition.type, payload.metaobjectDefinition?.id);
   }
 
   async createMetafield(definition: CanonicalMetafield): Promise<void> {
     const data = await this.request<{
       metafieldDefinitionCreate: { createdDefinition: { id: string } | null; userErrors: UserError[] };
-    }>(METAFIELD_CREATE, { definition: metafieldCreateInput(definition) }, true);
+    }>(METAFIELD_CREATE, { definition: metafieldCreateInput(toStoreField(definition, this.#idByType)) }, true);
     const payload = data.metafieldDefinitionCreate;
     assertMutation(payload.createdDefinition, payload.userErrors,
       `metafield:${definition.ownerType}:${definition.namespace}.${definition.key}`);
@@ -189,7 +223,7 @@ export class AdminClient {
       metaobjectDefinitionUpdate: { metaobjectDefinition: { id: string } | null; userErrors: UserError[] };
     }>(METAOBJECT_UPDATE, {
       id: entry.item.existing?.id,
-      definition: metaobjectUpdateInput(entry, force),
+      definition: metaobjectUpdateInput(this.#resolved(entry), force),
     }, true);
     const payload = data.metaobjectDefinitionUpdate;
     assertMutation(payload.metaobjectDefinition, payload.userErrors, entry.item.identity);
@@ -198,7 +232,7 @@ export class AdminClient {
   async updateMetafield(entry: DriftItem, force = false): Promise<void> {
     const data = await this.request<{
       metafieldDefinitionUpdate: { updatedDefinition: { id: string } | null; userErrors: UserError[] };
-    }>(METAFIELD_UPDATE, { definition: metafieldUpdateInput(entry, force) }, true);
+    }>(METAFIELD_UPDATE, { definition: metafieldUpdateInput(this.#resolved(entry), force) }, true);
     const payload = data.metafieldDefinitionUpdate;
     assertMutation(payload.updatedDefinition, payload.userErrors, entry.item.identity);
   }
@@ -228,15 +262,16 @@ export async function applyPlan(
   const updated: string[] = [];
   const skipped = deferred(drift, force).map((entry) => entry.item.identity);
   try {
-    // Updates run before creates so a metaobject a new metafield references is already correct.
+    // Metaobject creates run first so an update can reference a metaobject born this run; updates
+    // still precede metafield creates so a new metafield lands against already-corrected shape.
+    for (const item of plan.items.filter((value) => value.kind === 'metaobject' && value.status === 'CREATE')) {
+      await client.createMetaobject(item.desired as CanonicalMetaobject);
+      created.push(item.identity);
+    }
     for (const entry of written(drift, force)) {
       if (entry.item.kind === 'metaobject') await client.updateMetaobject(entry, force);
       else await client.updateMetafield(entry, force);
       updated.push(entry.item.identity);
-    }
-    for (const item of plan.items.filter((value) => value.kind === 'metaobject' && value.status === 'CREATE')) {
-      await client.createMetaobject(item.desired as CanonicalMetaobject);
-      created.push(item.identity);
     }
     for (const item of plan.items.filter((value) => value.kind === 'metafield' && value.status === 'CREATE')) {
       await client.createMetafield(item.desired as CanonicalMetafield);
@@ -450,7 +485,7 @@ query MetafieldDefinition($identifier: MetafieldDefinitionIdentifierInput!) {
 const METAOBJECT_CREATE = `
 mutation CreateMetaobjectDefinition($definition: MetaobjectDefinitionCreateInput!) {
   metaobjectDefinitionCreate(definition: $definition) {
-    metaobjectDefinition { id }
+    metaobjectDefinition { id type }
     userErrors { field message code }
   }
 }`;

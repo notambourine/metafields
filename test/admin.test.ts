@@ -99,6 +99,201 @@ test('a throttled mutation is retried; a mutation that may have landed is not', 
   assert.equal(serverErrors, 1);
 });
 
+// The escape this closes: --dry-run never sends a payload and the registry lists both validation
+// names, so nothing caught that Shopify resolves a metaobject reference by id alone. 0.1.0 sent
+// the type and every metaobject reference in the fleet was refused.
+test('metaobject references travel as types and reach Shopify as definition ids', async () => {
+  const desired = compileSchema(defineSchema({
+    metaobjects: {
+      faq: metaobject({ name: 'FAQ', fields: { title: field.string() } }),
+      story: metaobject({ name: 'Story', fields: { title: field.string() } }),
+    },
+    metafields: {
+      product: {
+        custom: {
+          faq_ref: field.metaobject('faq'),
+          any_ref: field.mixedMetaobject(['faq', 'story']),
+        },
+      },
+    },
+  }));
+  const ids: Record<string, string> = {
+    faq: 'gid://shopify/MetaobjectDefinition/1',
+    story: 'gid://shopify/MetaobjectDefinition/2',
+  };
+  const stored: Record<string, { name: string; value: string }[]> = {
+    faq_ref: [{ name: 'metaobject_definition_id', value: ids.faq as string }],
+    any_ref: [{ name: 'metaobject_definition_ids', value: JSON.stringify([ids.faq, ids.story]) }],
+  };
+  const types: Record<string, string> = { faq_ref: 'metaobject_reference', any_ref: 'mixed_reference' };
+  const sent: Record<string, { name: string; value: string }[]> = {};
+  const live = new Set<string>();
+  const client = new AdminClient({
+    store: 'example.myshopify.com',
+    token: 'shpat_x',
+    fetch: async (_input, init) => {
+      const body = JSON.parse(String(init?.body)) as { query: string; variables: Record<string, never> };
+      const variables = body.variables as Record<string, never> & {
+        type?: string;
+        identifier?: { key: string };
+        definition?: { type?: string; key?: string; validations?: { name: string; value: string }[] };
+      };
+      if (body.query.includes('metaobjectDefinitionCreate')) {
+        const type = String(variables.definition?.type);
+        live.add(type);
+        return response({
+          data: { metaobjectDefinitionCreate: { metaobjectDefinition: { id: ids[type], type }, userErrors: [] } },
+        });
+      }
+      if (body.query.includes('metafieldDefinitionCreate')) {
+        const key = String(variables.definition?.key);
+        sent[key] = variables.definition?.validations ?? [];
+        live.add(key);
+        return response({
+          data: {
+            metafieldDefinitionCreate: {
+              createdDefinition: { id: `gid://shopify/MetafieldDefinition/${key}` },
+              userErrors: [],
+            },
+          },
+        });
+      }
+      if (body.query.includes('metaobjectDefinitionByType')) {
+        const type = String(variables.type);
+        return response({
+          data: {
+            metaobjectDefinitionByType: live.has(type) ? {
+              id: ids[type], type, name: type, description: null, displayNameKey: null,
+              access: { admin: 'MERCHANT_READ_WRITE', storefront: 'NONE' },
+              capabilities: { publishable: { enabled: false }, translatable: { enabled: false } },
+              fieldDefinitions: [{
+                key: 'title', name: 'Title', description: null,
+                type: { name: 'single_line_text_field' }, required: false, validations: [],
+              }],
+            } : null,
+          },
+        });
+      }
+      const key = String(variables.identifier?.key);
+      return response({
+        data: {
+          metafieldDefinition: live.has(key) ? {
+            id: `gid://shopify/MetafieldDefinition/${key}`, namespace: 'custom', key, ownerType: 'PRODUCT',
+            name: key === 'faq_ref' ? 'Faq ref' : 'Any ref', description: null,
+            type: { name: types[key] }, validations: stored[key],
+            access: { admin: 'MERCHANT_READ_WRITE', storefront: 'PUBLIC_READ', customerAccount: 'NONE' },
+            capabilities: {
+              adminFilterable: { enabled: false }, analyticsQueryable: { enabled: false },
+              cartToOrderCopyable: { enabled: false }, smartCollectionCondition: { enabled: false },
+              uniqueValues: { enabled: false },
+            },
+            constraints: null, validationStatus: 'ALL_VALID', invalidCount: 0,
+          } : null,
+        },
+      });
+    },
+  });
+
+  const result = await synchronize(client, desired, 'apply');
+  assert.deepEqual(sent.faq_ref, [{ name: 'metaobject_definition_id', value: ids.faq }]);
+  assert.deepEqual(sent.any_ref, [
+    { name: 'metaobject_definition_ids', value: JSON.stringify([ids.faq, ids.story]) },
+  ]);
+  // Verification re-reads what Shopify stored, so the ids also have to compare clean as types.
+  assert.equal(result.plan.conflicts, 0);
+  assert.deepEqual(result.created, [
+    'metaobject:faq', 'metaobject:story',
+    'metafield:PRODUCT:custom.any_ref', 'metafield:PRODUCT:custom.faq_ref',
+  ]);
+});
+
+// The escape this closes: updates ran before creates, so adding a reference field to an existing
+// metaobject aborted the run part-applied whenever the referenced metaobject was born the same run.
+test('an update can add a reference to a metaobject created in the same run', async () => {
+  const desired = compileSchema(defineSchema({
+    metaobjects: {
+      faq: metaobject({ name: 'FAQ', fields: { title: field.string() } }),
+      article: metaobject({
+        name: 'Article',
+        fields: { title: field.string(), faq: field.metaobject('faq') },
+      }),
+    },
+    metafields: {},
+  }));
+  const faqId = 'gid://shopify/MetaobjectDefinition/10';
+  const articleId = 'gid://shopify/MetaobjectDefinition/11';
+  const calls: string[] = [];
+  let sentUpdate: { id?: string; definition?: { fieldDefinitions?: unknown } } = {};
+  let faqLive = false;
+  let articleUpdated = false;
+  const titleField = {
+    key: 'title', name: 'Title', description: null,
+    type: { name: 'single_line_text_field' }, required: false, validations: [],
+  };
+  const client = new AdminClient({
+    store: 'example.myshopify.com',
+    token: 'shpat_x',
+    fetch: async (_input, init) => {
+      const body = JSON.parse(String(init?.body)) as { query: string; variables: Record<string, unknown> };
+      if (body.query.includes('metaobjectDefinitionCreate')) {
+        calls.push('metaobjectDefinitionCreate');
+        faqLive = true;
+        return response({
+          data: { metaobjectDefinitionCreate: { metaobjectDefinition: { id: faqId, type: 'faq' }, userErrors: [] } },
+        });
+      }
+      if (body.query.includes('metaobjectDefinitionUpdate')) {
+        calls.push('metaobjectDefinitionUpdate');
+        sentUpdate = body.variables as typeof sentUpdate;
+        articleUpdated = true;
+        return response({
+          data: { metaobjectDefinitionUpdate: { metaobjectDefinition: { id: articleId }, userErrors: [] } },
+        });
+      }
+      const type = String((body.variables as { type?: string }).type);
+      const shell = {
+        description: null, displayNameKey: null,
+        access: { admin: 'MERCHANT_READ_WRITE', storefront: 'NONE' },
+        capabilities: { publishable: { enabled: false }, translatable: { enabled: false } },
+      };
+      if (type === 'faq') {
+        return response({
+          data: {
+            metaobjectDefinitionByType: faqLive
+              ? { id: faqId, type, name: 'FAQ', fieldDefinitions: [titleField], ...shell }
+              : null,
+          },
+        });
+      }
+      const faqRef = {
+        key: 'faq', name: 'Faq', description: null, type: { name: 'metaobject_reference' },
+        required: false, validations: [{ name: 'metaobject_definition_id', value: faqId }],
+      };
+      return response({
+        data: {
+          metaobjectDefinitionByType: {
+            id: articleId, type, name: 'Article',
+            fieldDefinitions: articleUpdated ? [titleField, faqRef] : [titleField],
+            ...shell,
+          },
+        },
+      });
+    },
+  });
+
+  const result = await synchronize(client, desired, 'apply');
+  assert.deepEqual(calls, ['metaobjectDefinitionCreate', 'metaobjectDefinitionUpdate']);
+  assert.equal(sentUpdate.id, articleId);
+  assert.deepEqual(sentUpdate.definition?.fieldDefinitions, [{
+    create: {
+      key: 'faq', type: 'metaobject_reference', name: 'Faq',
+      validations: [{ name: 'metaobject_definition_id', value: faqId }],
+    },
+  }]);
+  assert.deepEqual(result.created, ['metaobject:faq']);
+  assert.deepEqual(result.updated, ['metaobject:article']);
+});
+
 test('apply creates metaobjects before metafields and verifies afterward', async () => {
   const desired = compileSchema(defineSchema({
     metaobjects: { faq: metaobject({ name: 'FAQ', fields: { title: field.string() } }) },

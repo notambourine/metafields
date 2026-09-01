@@ -88,6 +88,13 @@ Cosmetic label drift does not change the exit code. Mutations retry Shopify's ex
 `THROTTLED` response, but are not retried after a timeout or `5xx` because the first request may
 have landed.
 
+## Metaobject references
+
+`field.metaobject()` and `field.mixedMetaobject()` name metaobject types, which are the same on
+every store. Shopify stores the reference as a definition ID, which is not, so the CLI resolves
+types to that store's IDs when it writes and reports them as types when it reads. A referenced
+metaobject must be declared in the same schema; it is created before anything that references it.
+
 ## Authentication
 
 For one store, set an Admin API token:

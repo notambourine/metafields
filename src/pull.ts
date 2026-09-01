@@ -5,6 +5,7 @@ import {
 } from './admin-shapes.js';
 import type { PulledSchema } from './generator.js';
 import type { ExistingMetaobject } from './planner.js';
+import { toPortableField } from './references.js';
 import { isReservedNamespace, OWNER_TYPES, type Owner } from './schema.js';
 
 interface Connection<T> {
@@ -58,6 +59,9 @@ export async function pullSchema(client: AdminClient, options: PullOptions): Pro
   }
 
   const metaobjects: ExistingMetaobject[] = [];
+  // Reserved definitions are excluded from the schema but stay in the index: a kept metafield may
+  // still reference one, and naming its type beats emitting an id no other store shares.
+  const typeById = new Map<string, string>();
   if (options.metaobjects) {
     let after: string | null = null;
     do {
@@ -66,6 +70,7 @@ export async function pullSchema(client: AdminClient, options: PullOptions): Pro
         { after },
       );
       for (const raw of data.metaobjectDefinitions.nodes) {
+        typeById.set(raw.id, raw.type);
         if (/^(app|shopify)--/i.test(raw.type)) {
           excluded.push(`metaobject:${raw.type}`);
           continue;
@@ -77,7 +82,14 @@ export async function pullSchema(client: AdminClient, options: PullOptions): Pro
         : null;
     } while (after);
   }
-  return { metaobjects, metafields, excluded };
+  return {
+    metaobjects: metaobjects.map((definition) => ({
+      ...definition,
+      fields: definition.fields.map((field) => toPortableField(field, typeById)),
+    })),
+    metafields: metafields.map((definition) => toPortableField(definition, typeById)),
+    excluded,
+  };
 }
 
 const METAFIELD_DEFINITIONS_QUERY = `
