@@ -50,14 +50,8 @@ export async function pullSchema(client: AdminClient, options: PullOptions): Pro
     }
   }
 
-  const hasMetaobjectReferences = metafields.some((field) => {
-    const type = typeof field.type === 'string' ? field.type : field.type.name;
-    return type.endsWith('metaobject_reference') || type.endsWith('mixed_reference');
-  });
-  if (hasMetaobjectReferences && !options.metaobjects) {
-    throw new Error('selected metafields contain metaobject references; rerun pull with --metaobjects');
-  }
-
+  // Without --metaobjects there is nothing for a reference to name, so the generator reports those
+  // metafields as skipped. Refusing the whole read instead would leave the operator nothing.
   const metaobjects: ExistingMetaobject[] = [];
   // Reserved definitions are excluded from the schema but stay in the index: a kept metafield may
   // still reference one, and naming its type beats emitting an id no other store shares.

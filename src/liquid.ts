@@ -1,3 +1,4 @@
+import { baseType } from './declarable.js';
 import { METAFIELD_TYPES } from './metafield-types.js';
 import type { CompiledSchema, Owner } from './schema.js';
 
@@ -54,9 +55,8 @@ export function emitLiquidMetafields(schema: CompiledSchema): LiquidEmit {
 
 // The language server ignores categories; UNKNOWN exposes types missing from Shopify's list.
 function categoryOf(type: string): string {
-  const base = type.startsWith('list.') ? type.slice('list.'.length) : type;
   const types: Record<string, { category: string } | undefined> = METAFIELD_TYPES;
-  return (types[type] ?? types[base])?.category ?? 'UNKNOWN';
+  return (types[type] ?? types[baseType(type)])?.category ?? 'UNKNOWN';
 }
 
 export function isLiquidMetafieldsFile(value: unknown): boolean {

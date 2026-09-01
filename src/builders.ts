@@ -1,22 +1,44 @@
+import { VALIDATION_OPTIONS } from './declarable.js';
 import {
   FIELD_MARKER,
   METAOBJECT_MARKER,
   SCHEMA_MARKER,
+  type ArticleReference,
   type CollectionReference,
+  type Color,
+  type CompanyReference,
+  type CustomerReference,
+  type DateOnly,
+  type DateOptions,
+  type DateTime,
   type Decimal,
+  type DecimalOptions,
   type FieldDefinition,
   type FieldOptions,
   type Fields,
   type FileReference,
+  type Id,
+  type Jurisdiction,
   type JsonOptions,
+  type LanguageCode,
+  type Link,
   type ListOptions,
+  type Measurement,
+  type MeasurementOptions,
+  type MeasurementType,
   type MetaobjectDefinition,
   type MetaobjectOptions,
   type MetaobjectReference,
   type Metafields,
   type Metaobjects,
+  type Money,
   type NumberOptions,
+  type OrderReference,
+  type PageReference,
+  type PatternOptions,
   type ProductReference,
+  type Rating,
+  type RatingOptions,
   type RichText,
   type SchemaDefinition,
   type TextOptions,
@@ -31,15 +53,10 @@ type RequiredFlag<O> = O extends { readonly required: true } ? true : false;
 
 function validations(options: Record<string, unknown>): Validation[] {
   const result: Validation[] = [];
-  for (const name of ['min', 'max', 'regex'] as const) {
-    const value = options[name];
-    if (value !== undefined) result.push({ name, value: String(value) });
-  }
-  if (options.choices !== undefined) {
-    result.push({ name: 'choices', value: JSON.stringify(options.choices) });
-  }
-  if (options.schema !== undefined) {
-    result.push({ name: 'schema', value: JSON.stringify(options.schema) });
+  for (const [name, option] of Object.entries(VALIDATION_OPTIONS)) {
+    const value = options[option];
+    if (value === undefined) continue;
+    result.push({ name, value: typeof value === 'object' ? JSON.stringify(value) : String(value) });
   }
   return result;
 }
@@ -72,7 +89,7 @@ export const field = {
   integer<const O extends NumberOptions = {}>(options = {} as O) {
     return makeField<number, O>('number_integer', options);
   },
-  decimal<const O extends NumberOptions = {}>(options = {} as O) {
+  decimal<const O extends DecimalOptions = {}>(options = {} as O) {
     return makeField<Decimal, O>('number_decimal', options);
   },
   boolean<const O extends FieldOptions = {}>(options = {} as O) {
@@ -83,6 +100,39 @@ export const field = {
   },
   json<Value = unknown, const O extends JsonOptions = JsonOptions>(options = {} as O) {
     return makeField<Value, O>('json', options);
+  },
+  money<const O extends FieldOptions = {}>(options = {} as O) {
+    return makeField<Money, O>('money', options);
+  },
+  color<const O extends FieldOptions = {}>(options = {} as O) {
+    return makeField<Color, O>('color', options);
+  },
+  date<const O extends DateOptions = {}>(options = {} as O) {
+    return makeField<DateOnly, O>('date', options);
+  },
+  dateTime<const O extends DateOptions = {}>(options = {} as O) {
+    return makeField<DateTime, O>('date_time', options);
+  },
+  rating<const O extends RatingOptions>(options: O) {
+    return makeField<Rating, O>('rating', options);
+  },
+  link<const O extends FieldOptions = {}>(options = {} as O) {
+    return makeField<Link, O>('link', options);
+  },
+  measurement<const T extends MeasurementType, const O extends MeasurementOptions = {}>(
+    type: T,
+    options = {} as O,
+  ) {
+    return makeField<Measurement, O>(type, options);
+  },
+  id<const O extends PatternOptions = {}>(options = {} as O) {
+    return makeField<Id, O>('id', options);
+  },
+  language<const O extends FieldOptions = {}>(options = {} as O) {
+    return makeField<LanguageCode, O>('language', options);
+  },
+  jurisdiction<const O extends FieldOptions = {}>(options = {} as O) {
+    return makeField<Jurisdiction, O>('jurisdiction', options);
   },
   product<const O extends FieldOptions = {}>(options = {} as O) {
     return makeField<ProductReference, O>('product_reference', options);
@@ -95,6 +145,21 @@ export const field = {
   },
   file<const O extends FieldOptions = {}>(options = {} as O) {
     return makeField<FileReference, O>('file_reference', options);
+  },
+  article<const O extends FieldOptions = {}>(options = {} as O) {
+    return makeField<ArticleReference, O>('article_reference', options);
+  },
+  page<const O extends FieldOptions = {}>(options = {} as O) {
+    return makeField<PageReference, O>('page_reference', options);
+  },
+  order<const O extends FieldOptions = {}>(options = {} as O) {
+    return makeField<OrderReference, O>('order_reference', options);
+  },
+  customer<const O extends FieldOptions = {}>(options = {} as O) {
+    return makeField<CustomerReference, O>('customer_reference', options);
+  },
+  company<const O extends FieldOptions = {}>(options = {} as O) {
+    return makeField<CompanyReference, O>('company_reference', options);
   },
   metaobject<const Key extends string, const O extends FieldOptions = {}>(key: Key, options = {} as O) {
     return makeField<MetaobjectReference<Key>, O, Key>(
@@ -127,14 +192,13 @@ export const field = {
         ? `list.${validation.name}`
         : validation.name,
     }));
-    const referenceValidations = inner.validations.filter((validation) =>
-      validation.name.startsWith('metaobject_definition_'),
-    );
+    // The list options bound how many entries a value may hold; the inner builder's validations
+    // bound each entry, and Shopify accepts both on the same definition.
     return {
       __kind: FIELD_MARKER,
       type: `list.${inner.type}`,
       options,
-      validations: [...listValidations, ...referenceValidations],
+      validations: [...listValidations, ...inner.validations],
       targets: inner.targets,
     } as FieldDefinition<Value[], RequiredFlag<O>, Targets>;
   },

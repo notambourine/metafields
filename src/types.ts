@@ -1,3 +1,5 @@
+import type { METAFIELD_TYPES, MetafieldTypeName } from './metafield-types.js';
+
 export const FIELD_MARKER = '@notambourine/metafields/field' as const;
 export const METAOBJECT_MARKER = '@notambourine/metafields/metaobject' as const;
 export const SCHEMA_MARKER = '@notambourine/metafields/schema' as const;
@@ -7,14 +9,37 @@ declare const brand: unique symbol;
 export type Decimal = string & { readonly [brand]: 'Decimal' };
 export type Url = string & { readonly [brand]: 'Url' };
 export type RichText = object & { readonly [brand]: 'RichText' };
+export type Money = object & { readonly [brand]: 'Money' };
+export type Color = string & { readonly [brand]: 'Color' };
+export type DateOnly = string & { readonly [brand]: 'DateOnly' };
+export type DateTime = string & { readonly [brand]: 'DateTime' };
+export type Rating = object & { readonly [brand]: 'Rating' };
+export type Link = object & { readonly [brand]: 'Link' };
+export type Measurement = object & { readonly [brand]: 'Measurement' };
+export type Id = string & { readonly [brand]: 'Id' };
+export type LanguageCode = string & { readonly [brand]: 'LanguageCode' };
+export type Jurisdiction = string & { readonly [brand]: 'Jurisdiction' };
 export type ProductReference = string & { readonly [brand]: 'ProductReference' };
 export type VariantReference = string & { readonly [brand]: 'VariantReference' };
 export type CollectionReference = string & { readonly [brand]: 'CollectionReference' };
 export type FileReference = string & { readonly [brand]: 'FileReference' };
+export type ArticleReference = string & { readonly [brand]: 'ArticleReference' };
+export type PageReference = string & { readonly [brand]: 'PageReference' };
+export type OrderReference = string & { readonly [brand]: 'OrderReference' };
+export type CustomerReference = string & { readonly [brand]: 'CustomerReference' };
+export type CompanyReference = string & { readonly [brand]: 'CompanyReference' };
 export type MetaobjectReference<Key extends string> = string & {
   readonly [brand]: 'MetaobjectReference';
   readonly __metaobjectType?: Key;
 };
+
+// Measurements differ only by unit, so the registry names them rather than a builder each: a unit
+// Shopify adds becomes declarable as soon as the generated table is refreshed.
+export type MeasurementType = {
+  [K in MetafieldTypeName]: K extends `list.${string}`
+    ? never
+    : (typeof METAFIELD_TYPES)[K]['category'] extends 'MEASUREMENT' ? K : never;
+}[MetafieldTypeName];
 
 export interface Validation {
   readonly name: string;
@@ -40,16 +65,45 @@ export interface FieldOptions {
   };
 }
 
-export interface TextOptions extends FieldOptions {
+export interface PatternOptions extends FieldOptions {
   readonly min?: number;
   readonly max?: number;
   readonly regex?: string;
+}
+
+export interface TextOptions extends PatternOptions {
   readonly choices?: readonly string[];
 }
 
 export interface NumberOptions extends FieldOptions {
   readonly min?: number | string;
   readonly max?: number | string;
+}
+
+export interface DecimalOptions extends NumberOptions {
+  readonly maxPrecision?: number;
+}
+
+export interface DateOptions extends FieldOptions {
+  readonly min?: string;
+  readonly max?: string;
+}
+
+// Shopify stores a rating alongside the scale it was recorded on, and rejects a definition that
+// omits either bound.
+export interface RatingOptions extends FieldOptions {
+  readonly scaleMin: number;
+  readonly scaleMax: number;
+}
+
+export interface MeasurementValue {
+  readonly value: number;
+  readonly unit: string;
+}
+
+export interface MeasurementOptions extends FieldOptions {
+  readonly min?: MeasurementValue;
+  readonly max?: MeasurementValue;
 }
 
 export interface JsonOptions extends FieldOptions {

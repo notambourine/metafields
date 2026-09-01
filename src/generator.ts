@@ -1,11 +1,27 @@
-import type { ExistingMetafield, ExistingMetaobject } from './planner.js';
+import { baseType, builderFor, VALIDATION_OPTIONS } from './declarable.js';
+import type { ExistingField, ExistingMetafield, ExistingMetaobject } from './planner.js';
 import { isReservedNamespace, type Owner } from './schema.js';
+import type { Validation } from './types.js';
 
 export interface PulledSchema {
   metaobjects: ExistingMetaobject[];
   metafields: (ExistingMetafield & { owner: Owner })[];
   excluded: string[];
 }
+
+// A definition this release cannot declare, and why. pull writes the rest rather than refusing the
+// store: a schema missing a field is something an operator can act on, an empty file is not.
+export interface SkippedDefinition {
+  identity: string;
+  reason: string;
+}
+
+export interface GeneratedSchema {
+  module: string;
+  skipped: SkippedDefinition[];
+}
+
+type AnyField = ExistingField | (ExistingMetafield & { owner: Owner });
 
 function quote(value: string): string {
   return JSON.stringify(value);
@@ -15,98 +31,204 @@ function property(key: string): string {
   return /^[A-Za-z_$][\w$]*$/.test(key) ? key : quote(key);
 }
 
-function options(field: ExistingMetafield | ExistingMetaobject['fields'][number], metaobjectField = false): string {
+// Shopify sends every validation as a string. Bounds carry a number, a date, or a measurement's
+// value and unit; the rest already arrive as the JSON their option accepts.
+function renderValidation(name: string, value: string): string {
+  if (name === 'regex') return quote(value);
+  if (name !== 'min' && name !== 'max') return value;
+  const trimmed = value.trim();
+  if (trimmed.startsWith('{')) return trimmed;
+  const numeric = Number(trimmed);
+  return JSON.stringify(trimmed === '' || Number.isNaN(numeric) ? value : numeric);
+}
+
+function options(
+  field: AnyField,
+  validations: readonly Validation[],
+  metaobjectField: boolean,
+  attributes = true,
+): string {
   const result: string[] = [];
-  if (field.name) result.push(`name: ${quote(field.name)}`);
-  if (field.description) result.push(`description: ${quote(field.description)}`);
-  if (field.required === true) result.push('required: true');
-  const validationMap = new Map(field.validations?.map((item) => [item.name, item.value]));
-  for (const name of ['min', 'max'] as const) {
-    const value = validationMap.get(name);
-    if (value !== undefined) result.push(`${name}: ${JSON.stringify(Number.isNaN(Number(value)) ? value : Number(value))}`);
+  if (attributes) {
+    if (field.name) result.push(`name: ${quote(field.name)}`);
+    if (field.description) result.push(`description: ${quote(field.description)}`);
+    if (field.required === true) result.push('required: true');
   }
-  const regex = validationMap.get('regex');
-  if (regex !== undefined) result.push(`regex: ${quote(regex)}`);
-  const choices = validationMap.get('choices');
-  if (choices !== undefined) result.push(`choices: ${choices}`);
-  const jsonSchema = validationMap.get('schema');
-  if (jsonSchema !== undefined) result.push(`schema: ${jsonSchema}`);
-  if (!metaobjectField && 'access' in field && field.access) {
+  const validationMap = new Map(validations.map((item) => [item.name, item.value]));
+  for (const [name, option] of Object.entries(VALIDATION_OPTIONS)) {
+    const value = validationMap.get(name);
+    if (value !== undefined) result.push(`${option}: ${renderValidation(name, value)}`);
+  }
+  if (attributes && !metaobjectField && 'access' in field && field.access) {
     const access = Object.entries(field.access)
       .filter(([key]) => key === 'admin' || key === 'storefront')
       .filter(([, value]) => value !== null)
       .map(([key, value]) => `${key}: ${quote(String(value).toLowerCase())}`);
     if (access.length > 0) result.push(`access: { ${access.join(', ')} }`);
   }
-  if (!metaobjectField && 'capabilities' in field && field.capabilities) {
+  if (attributes && !metaobjectField && 'capabilities' in field && field.capabilities) {
     for (const key of [
       'adminFilterable', 'analyticsQueryable', 'cartToOrderCopyable', 'smartCollectionCondition', 'uniqueValues',
     ] as const) {
       if (field.capabilities[key] !== undefined) result.push(`${key}: ${String(field.capabilities[key])}`);
     }
   }
-  if (!metaobjectField && 'constraints' in field && field.constraints?.key) {
+  if (attributes && !metaobjectField && 'constraints' in field && field.constraints?.key) {
     result.push(`constraints: { key: ${quote(field.constraints.key)}, values: ${JSON.stringify([...field.constraints.values].sort())} }`);
   }
   return result.length > 0 ? `{ ${result.join(', ')} }` : '';
 }
 
-const builders: Record<string, string> = {
-  single_line_text_field: 'string',
-  multi_line_text_field: 'text',
-  rich_text_field: 'richText',
-  number_integer: 'integer',
-  number_decimal: 'decimal',
-  boolean: 'boolean',
-  url: 'url',
-  json: 'json<unknown>',
-  product_reference: 'product',
-  variant_reference: 'variant',
-  collection_reference: 'collection',
-  file_reference: 'file',
-};
+// The pulled definition says nothing about the shape behind a json value, so the generic stays
+// unknown for the operator to narrow.
+const TYPE_ARGUMENTS: Record<string, string> = { json: '<unknown>' };
 
-function fieldExpression(field: ExistingMetafield | ExistingMetaobject['fields'][number], metaobjectField = false): string {
-  const rawType = typeof field.type === 'string' ? field.type : field.type.name;
-  const list = rawType.startsWith('list.');
-  const type = list ? rawType.slice(5) : rawType;
-  const validations = new Map(field.validations?.map((item) => [item.name, item.value]));
-  let expression: string;
-  if (type === 'metaobject_reference') {
-    const target = validations.get('metaobject_definition_type');
-    if (!target) throw new Error(`${field.key}: metaobject reference has no portable type validation`);
-    expression = `field.metaobject(${quote(target)})`;
-  } else if (type === 'mixed_reference') {
-    const value = validations.get('metaobject_definition_types');
-    if (!value) throw new Error(`${field.key}: mixed reference has no portable type validation`);
-    expression = `field.mixedMetaobject(${value})`;
-  } else {
-    const builder = builders[type];
-    if (!builder) throw new Error(`${field.key}: unsupported Shopify type ${rawType}`);
-    expression = `field.${builder}()`;
+// Reference targets become builder arguments rather than options.
+const REFERENCE_VALIDATIONS = new Set(['metaobject_definition_type', 'metaobject_definition_types']);
+
+type Expression = { code: string; reason?: undefined } | { code?: undefined; reason: string };
+
+function referenceTargets(type: string, validations: readonly Validation[]): string[] | undefined {
+  const value = validations.find((item) =>
+    item.name === (type === 'mixed_reference' ? 'metaobject_definition_types' : 'metaobject_definition_type'),
+  )?.value;
+  if (value === undefined) return undefined;
+  if (type !== 'mixed_reference') return [value];
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value);
+  } catch {
+    return undefined;
   }
-  const fieldOptions = options(field, metaobjectField);
-  if (fieldOptions && !list) expression = expression.replace(/\(\)$/, `(${fieldOptions})`);
-  if (list) {
-    const listValues = new Map(field.validations?.filter((item) => item.name.startsWith('list.'))
-      .map((item) => [item.name.slice(5), item.value]));
-    const listOptions = options({ ...field, validations: [...listValues].map(([name, value]) => ({ name, value })) }, metaobjectField);
-    expression = `field.list(${expression}${listOptions ? `, ${listOptions}` : ''})`;
-  }
-  return expression;
+  return Array.isArray(parsed) && parsed.every((item) => typeof item === 'string') ? parsed : undefined;
 }
 
-export function generateSchemaModule(pulled: PulledSchema): string {
-  const lines = [
+function fieldExpression(
+  field: AnyField,
+  declared: ReadonlySet<string>,
+  metaobjectField: boolean,
+): Expression {
+  const rawType = typeof field.type === 'string' ? field.type : field.type.name;
+  const list = rawType.startsWith('list.');
+  const type = baseType(rawType);
+  const call = builderFor(type);
+  if (!call) return { reason: `this release cannot declare ${rawType}` };
+
+  const all = field.validations ?? [];
+  const args = [...call.args];
+  if (type === 'metaobject_reference' || type === 'mixed_reference') {
+    const targets = referenceTargets(type, all);
+    if (!targets || targets.length === 0) {
+      // A reference Shopify stores as a definition id stays an id until a pulled metaobject names
+      // it, and an id belongs to one store, so the guidance travels with the definition it affects.
+      return {
+        reason: all.some((entry) => entry.name.startsWith('metaobject_definition_id'))
+          ? `${rawType} names a definition id this store owns; rerun pull with --metaobjects to resolve it`
+          : `${rawType} names no metaobject type`,
+      };
+    }
+    const missing = targets.filter((target) => !declared.has(target));
+    if (missing.length > 0) {
+      return { reason: `references ${missing.join(', ')}, which this pull did not write` };
+    }
+    args.push(type === 'mixed_reference' ? JSON.stringify(targets) : quote(targets[0] as string));
+  }
+
+  const itemValidations = all.filter((entry) => !entry.name.startsWith('list.') && !REFERENCE_VALIDATIONS.has(entry.name));
+  const undeclarable = itemValidations.find((entry) => !(entry.name in VALIDATION_OPTIONS));
+  if (undeclarable) {
+    return { reason: `no option declares the ${undeclarable.name} validation on ${rawType}` };
+  }
+
+  const builder = `field.${call.name}${TYPE_ARGUMENTS[type] ?? ''}`;
+  if (!list) {
+    const fieldOptions = options(field, itemValidations, metaobjectField);
+    return { code: `${builder}(${[...args, fieldOptions].filter((part) => part !== '').join(', ')})` };
+  }
+  const inner = `${builder}(${[...args, options(field, itemValidations, metaobjectField, false)].filter((part) => part !== '').join(', ')})`;
+  const bounds = all
+    .filter((entry) => entry.name.startsWith('list.'))
+    .map((entry) => ({ name: entry.name.slice('list.'.length), value: entry.value }));
+  const outer = options(field, bounds, metaobjectField);
+  return { code: `field.list(${inner}${outer === '' ? '' : `, ${outer}`})` };
+}
+
+interface DeclaredMetaobject {
+  definition: ExistingMetaobject;
+  fields: { key: string; code: string }[];
+}
+
+interface Declarable {
+  metaobjects: DeclaredMetaobject[];
+  metafields: { field: ExistingMetafield & { owner: Owner }; code: string }[];
+  skipped: SkippedDefinition[];
+}
+
+// A metaobject with nothing left to declare is dropped, which can strand a reference to it, which
+// can empty another metaobject. Passing until the set stops shrinking keeps the written schema one
+// that compiles.
+function declarable(pulled: PulledSchema): Declarable {
+  const declared = new Set(pulled.metaobjects.map((definition) => definition.type));
+  const dropped = new Map<string, string>();
+  let metaobjects: DeclaredMetaobject[] = [];
+  let skipped: SkippedDefinition[] = [];
+  for (;;) {
+    metaobjects = [];
+    skipped = [];
+    const emptied: string[] = [];
+    for (const definition of pulled.metaobjects) {
+      if (!declared.has(definition.type)) continue;
+      const fields: DeclaredMetaobject['fields'] = [];
+      const reasons: SkippedDefinition[] = [];
+      for (const field of definition.fields) {
+        const result = fieldExpression(field, declared, true);
+        if (result.code !== undefined) fields.push({ key: field.key, code: result.code });
+        else reasons.push({ identity: `metaobject:${definition.type}.${field.key}`, reason: result.reason });
+      }
+      if (fields.length > 0) {
+        metaobjects.push({ definition, fields });
+        skipped.push(...reasons);
+        continue;
+      }
+      emptied.push(definition.type);
+      dropped.set(definition.type, `no field this release can declare, starting with ${reasons[0]?.reason ?? 'no field at all'}`);
+    }
+    if (emptied.length === 0) break;
+    for (const type of emptied) declared.delete(type);
+  }
+
+  const metafields: Declarable['metafields'] = [];
+  for (const field of pulled.metafields) {
+    const result = fieldExpression(field, declared, false);
+    if (result.code !== undefined) metafields.push({ field, code: result.code });
+    else skipped.push({ identity: `${field.owner}:${field.namespace}.${field.key}`, reason: result.reason });
+  }
+  for (const [type, reason] of dropped) skipped.push({ identity: `metaobject:${type}`, reason });
+  skipped.sort((a, b) => a.identity.localeCompare(b.identity));
+  return { metaobjects, metafields, skipped };
+}
+
+export function generateSchemaModule(pulled: PulledSchema): GeneratedSchema {
+  const { metaobjects, metafields, skipped } = declarable(pulled);
+  const lines: string[] = [];
+  if (skipped.length > 0) {
+    lines.push(`// Pulled without ${skipped.length} definition(s) this release cannot declare:`);
+    for (const entry of skipped) lines.push(`//   ${entry.identity}: ${entry.reason}`);
+    lines.push('');
+  }
+  lines.push(
     "import { defineSchema, field, metaobject } from '@notambourine/metafields';",
     '',
     'export default defineSchema({',
     '  metaobjects: {',
-  ];
-  for (const definition of [...pulled.metaobjects].sort((a, b) => a.type.localeCompare(b.type))) {
+  );
+  for (const { definition, fields } of [...metaobjects].sort((a, b) => a.definition.type.localeCompare(b.definition.type))) {
     const metaOptions = [`name: ${quote(definition.name)}`];
     if (definition.description) metaOptions.push(`description: ${quote(definition.description)}`);
-    if (definition.displayNameKey) metaOptions.push(`displayNameKey: ${quote(definition.displayNameKey)}`);
+    // A display key naming a field this file could not declare would not compile.
+    if (definition.displayNameKey && fields.some((field) => field.key === definition.displayNameKey)) {
+      metaOptions.push(`displayNameKey: ${quote(definition.displayNameKey)}`);
+    }
     if (definition.access) {
       const values = Object.entries(definition.access)
         .filter(([key]) => key === 'admin' || key === 'storefront')
@@ -121,27 +243,27 @@ export function generateSchemaModule(pulled: PulledSchema): string {
     lines.push(`    ${property(definition.type)}: metaobject({`);
     for (const option of metaOptions) lines.push(`      ${option},`);
     lines.push('      fields: {');
-    for (const field of [...definition.fields].sort((a, b) => a.key.localeCompare(b.key))) {
-      lines.push(`        ${property(field.key)}: ${fieldExpression(field, true)},`);
+    for (const field of [...fields].sort((a, b) => a.key.localeCompare(b.key))) {
+      lines.push(`        ${property(field.key)}: ${field.code},`);
     }
     lines.push('      },', '    }),');
   }
   lines.push('  },', '  metafields: {');
-  const owners = groupBy(pulled.metafields, (field) => field.owner);
+  const owners = groupBy(metafields, (entry) => entry.field.owner);
   for (const [owner, ownerFields] of [...owners].sort(([a], [b]) => a.localeCompare(b))) {
     lines.push(`    ${property(owner)}: {`);
-    const namespaces = groupBy(ownerFields, (field) => field.namespace);
+    const namespaces = groupBy(ownerFields, (entry) => entry.field.namespace);
     for (const [namespace, fields] of [...namespaces].sort(([a], [b]) => a.localeCompare(b))) {
       lines.push(`      ${property(namespace)}: {`);
-      for (const field of [...fields].sort((a, b) => a.key.localeCompare(b.key))) {
-        lines.push(`        ${property(field.key)}: ${fieldExpression(field)},`);
+      for (const entry of [...fields].sort((a, b) => a.field.key.localeCompare(b.field.key))) {
+        lines.push(`        ${property(entry.field.key)}: ${entry.code},`);
       }
       lines.push('      },');
     }
     lines.push('    },');
   }
   lines.push('  },', '});', '');
-  return lines.join('\n');
+  return { module: lines.join('\n'), skipped };
 }
 
 function groupBy<T, K>(values: readonly T[], key: (value: T) => K): Map<K, T[]> {

@@ -119,9 +119,12 @@ async function pullCommand(args: Arguments): Promise<number> {
   const generated = generateSchemaModule(pulled);
   await deliver(args, {
     key: 'schema',
-    value: generated,
-    text: generated,
-    notes: { key: 'excluded', identities: pulled.excluded },
+    value: generated.module,
+    text: generated.module,
+    notes: [
+      { key: 'excluded', identities: pulled.excluded },
+      { key: 'skipped', identities: generated.skipped.map((entry) => entry.identity) },
+    ],
   });
   return 0;
 }
@@ -149,7 +152,7 @@ async function emitCommand(args: Arguments): Promise<number> {
     key: 'definitions',
     value: definitions,
     text: stringifyCanonical(definitions),
-    notes: { key: 'skipped', identities: skipped },
+    notes: [{ key: 'skipped', identities: skipped }],
     overwrite: true,
   });
   return 0;
@@ -309,12 +312,12 @@ interface Delivery {
   key: string;
   value: unknown;
   text: string;
-  notes?: { key: string; identities: readonly string[] };
+  notes?: readonly { key: string; identities: readonly string[] }[];
   overwrite?: boolean;
 }
 
 async function deliver(args: Arguments, delivery: Delivery): Promise<void> {
-  const notes = delivery.notes ? { [delivery.notes.key]: delivery.notes.identities } : {};
+  const notes = Object.fromEntries((delivery.notes ?? []).map((note) => [note.key, note.identities]));
   const out = oneValue(args, 'out', false);
   if (out !== undefined) {
     await writeOut(out, delivery.text, delivery.overwrite);
@@ -326,8 +329,10 @@ async function deliver(args: Arguments, delivery: Delivery): Promise<void> {
     return;
   }
   process.stdout.write(delivery.text);
-  for (const identity of delivery.notes?.identities ?? []) {
-    process.stderr.write(`${delivery.notes?.key.toUpperCase()} ${identity}\n`);
+  for (const note of delivery.notes ?? []) {
+    for (const identity of note.identities) {
+      process.stderr.write(`${note.key.toUpperCase()} ${identity}\n`);
+    }
   }
 }
 
