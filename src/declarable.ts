@@ -55,7 +55,22 @@ export const VALIDATION_OPTIONS: Record<string, string> = {
   max_precision: 'maxPrecision',
   scale_min: 'scaleMin',
   scale_max: 'scaleMax',
+  file_type_options: 'fileTypes',
+  allowed_domains: 'allowedDomains',
 };
+
+// Validations a builder argument carries instead of an option, because they name the definition a
+// reference points at rather than bound its value.
+export const REFERENCE_VALIDATIONS = new Set([
+  'metaobject_definition_id',
+  'metaobject_definition_ids',
+  'metaobject_definition_type',
+  'metaobject_definition_types',
+]);
+
+// Validations this release will not state, and why, for types it otherwise declares. Empty is the
+// healthy state: the coverage test routes a validation Shopify adds through here or an option.
+export const DECLINED_VALIDATIONS: Record<string, string> = {};
 
 export interface BuilderCall {
   readonly name: string;

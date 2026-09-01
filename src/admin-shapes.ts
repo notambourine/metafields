@@ -1,4 +1,5 @@
 import type { ExistingField, ExistingMetafield, ExistingMetaobject } from './planner.js';
+import { FIELD_CAPABILITIES } from './types.js';
 
 export interface RawField {
   key: string;
@@ -84,13 +85,7 @@ export const METAFIELD_SELECTION = `
   id namespace key ownerType name description type { name }
   validations { name value }
   access { admin storefront customerAccount }
-  capabilities {
-    adminFilterable { enabled }
-    analyticsQueryable { enabled }
-    cartToOrderCopyable { enabled }
-    smartCollectionCondition { enabled }
-    uniqueValues { enabled }
-  }
+  capabilities { ${FIELD_CAPABILITIES.map((name) => `${name} { enabled }`).join(' ')} }
   constraints { key values(first: 250) { nodes { value } } }
   validationStatus
   invalidCount: metafieldsCount(validationStatus: INVALID)

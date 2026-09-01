@@ -16,12 +16,14 @@ import {
   type FieldDefinition,
   type FieldOptions,
   type Fields,
+  type FileOptions,
   type FileReference,
   type Id,
   type Jurisdiction,
   type JsonOptions,
   type LanguageCode,
   type Link,
+  type LinkOptions,
   type ListOptions,
   type Measurement,
   type MeasurementOptions,
@@ -95,7 +97,7 @@ export const field = {
   boolean<const O extends FieldOptions = {}>(options = {} as O) {
     return makeField<boolean, O>('boolean', options);
   },
-  url<const O extends FieldOptions = {}>(options = {} as O) {
+  url<const O extends LinkOptions = {}>(options = {} as O) {
     return makeField<Url, O>('url', options);
   },
   json<Value = unknown, const O extends JsonOptions = JsonOptions>(options = {} as O) {
@@ -116,7 +118,7 @@ export const field = {
   rating<const O extends RatingOptions>(options: O) {
     return makeField<Rating, O>('rating', options);
   },
-  link<const O extends FieldOptions = {}>(options = {} as O) {
+  link<const O extends LinkOptions = {}>(options = {} as O) {
     return makeField<Link, O>('link', options);
   },
   measurement<const T extends MeasurementType, const O extends MeasurementOptions = {}>(
@@ -143,7 +145,7 @@ export const field = {
   collection<const O extends FieldOptions = {}>(options = {} as O) {
     return makeField<CollectionReference, O>('collection_reference', options);
   },
-  file<const O extends FieldOptions = {}>(options = {} as O) {
+  file<const O extends FileOptions = {}>(options = {} as O) {
     return makeField<FileReference, O>('file_reference', options);
   },
   article<const O extends FieldOptions = {}>(options = {} as O) {

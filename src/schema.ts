@@ -1,5 +1,6 @@
 import type { MetafieldOwnerType } from './metafield-types.js';
 import {
+  FIELD_CAPABILITIES,
   FIELD_MARKER,
   METAOBJECT_MARKER,
   SCHEMA_MARKER,
@@ -134,9 +135,7 @@ function normalizeField(field: unknown, key: string, path: string): CanonicalFie
   const access = normalizeAccess(options.access, `${path}.access`);
   if (access) normalized.access = access;
   const capabilities: Record<string, boolean> = {};
-  for (const key of [
-    'adminFilterable', 'analyticsQueryable', 'cartToOrderCopyable', 'smartCollectionCondition', 'uniqueValues',
-  ] as const) {
+  for (const key of FIELD_CAPABILITIES) {
     if (typeof options[key] === 'boolean') capabilities[key] = options[key];
   }
   if (Object.keys(capabilities).length > 0) normalized.capabilities = capabilities;

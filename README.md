@@ -179,6 +179,9 @@ References are `product()`, `variant()`, `collection()`, `file()`, `article()`, 
 `customer()`, `company()`, `metaobject()`, and `mixedMetaobject()`. Wrap any of them in
 `field.list()` where Shopify publishes a list counterpart.
 
+`file()` names the file kinds it accepts and `url()` and `link()` the domains they allow:
+`field.file({ fileTypes: ['Image'] })`, `field.url({ allowedDomains: ['example.com'] })`.
+
 Shopify's disclosure and product-taxonomy references are the exception. Each points at a definition
 or taxonomy handle Shopify owns on the store itself, which no schema can create or carry to another
 store, so no builder declares them and `pull` reports them as skipped.

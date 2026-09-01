@@ -46,7 +46,19 @@ export interface Validation {
   readonly value: string;
 }
 
-export interface FieldOptions {
+// Every field capability, named once. FieldOptions takes its keys from here, compile and pull walk
+// it, and the Admin selection is built from it, so one Shopify adds is a single edit.
+export const FIELD_CAPABILITIES = [
+  'adminFilterable',
+  'analyticsQueryable',
+  'cartToOrderCopyable',
+  'smartCollectionCondition',
+  'uniqueValues',
+] as const;
+
+export type FieldCapability = typeof FIELD_CAPABILITIES[number];
+
+export interface FieldOptions extends Readonly<Partial<Record<FieldCapability, boolean>>> {
   readonly name?: string;
   readonly description?: string;
   readonly required?: boolean;
@@ -54,11 +66,6 @@ export interface FieldOptions {
     readonly admin?: 'merchant_read' | 'merchant_read_write';
     readonly storefront?: 'none' | 'public_read';
   };
-  readonly adminFilterable?: boolean;
-  readonly analyticsQueryable?: boolean;
-  readonly cartToOrderCopyable?: boolean;
-  readonly smartCollectionCondition?: boolean;
-  readonly uniqueValues?: boolean;
   readonly constraints?: {
     readonly key: string;
     readonly values: readonly string[];
@@ -108,6 +115,16 @@ export interface MeasurementOptions extends FieldOptions {
 
 export interface JsonOptions extends FieldOptions {
   readonly schema?: object;
+}
+
+// Shopify names the accepted kinds and hosts as free-form strings rather than an enum, so the
+// values stay unconstrained here and the store rejects the ones it does not know.
+export interface FileOptions extends FieldOptions {
+  readonly fileTypes?: readonly string[];
+}
+
+export interface LinkOptions extends FieldOptions {
+  readonly allowedDomains?: readonly string[];
 }
 
 export interface ListOptions extends FieldOptions {
