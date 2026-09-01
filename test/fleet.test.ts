@@ -14,6 +14,7 @@ import {
   GrantError,
   metaobject,
   mintAccessToken,
+  renderFleet,
   synchronize,
   synchronizeFleet,
   type CompiledSchema,
@@ -159,6 +160,55 @@ test('minting posts client credentials and keeps the two meaningful grant errors
       fetch: async () => Response.json({ error: code, error_description: `${code} detail` }, { status: 400 }),
     }), (error: unknown) => error instanceof GrantError && error.code === code);
   }
+});
+
+// A fleet sweep is read to find the exceptions, so a store whose definitions all match has to
+// cost one line however many it carries, and every line it does print has to say what it acted on.
+test('the fleet report collapses matching definitions and names the shape of each one it prints', async () => {
+  const desired = compileSchema(defineSchema({
+    metaobjects: { faq: metaobject({ name: 'FAQ', fields: { question: field.string({ name: 'Question' }) } }) },
+    metafields: { product: { custom: {
+      promo_text: field.string({ name: 'Promo text' }),
+      docs: field.url({ name: 'Docs' }),
+    } } },
+  }));
+  const metafields: unknown[] = [PRESENT];
+  const connect = (async (store: string) => ({
+    store,
+    async readSchema() {
+      return {
+        metaobjects: [{
+          id: 'gid://shopify/MetaobjectDefinition/1', type: 'faq', name: 'FAQ',
+          fields: [{ key: 'question', name: 'Question', type: 'single_line_text_field', validations: [] }],
+        }],
+        metafields,
+      };
+    },
+    async createMetafield() {
+      metafields.push({ ...PRESENT, key: 'docs', name: 'Docs', type: 'url' });
+    },
+  })) as unknown as Connect;
+  const result = await synchronizeFleet(targets(['a.myshopify.com', true]), desired, 'apply', connect);
+  assert.equal(renderFleet(result), [
+    'STORE a.myshopify.com (2 in sync)',
+    'CREATED metafield:PRODUCT:custom.docs url',
+    '',
+  ].join('\n'));
+});
+
+test('a definition force alone cannot fix keeps its reasons and its advice', async () => {
+  const connect = (async (store: string) => ({
+    store,
+    async readSchema() { return { metaobjects: [], metafields: [{ ...PRESENT, type: 'url' }] }; },
+  })) as unknown as Connect;
+  const result = await synchronizeFleet(targets(['a.myshopify.com', true]), schema(), 'dry-run', connect);
+  assert.equal(renderFleet(result), [
+    'STORE a.myshopify.com',
+    'BLOCKED metafield:PRODUCT:custom.promo_text single_line_text_field',
+    '  metafield:PRODUCT:custom.promo_text.type: expected single_line_text_field, found url',
+    '  Shopify will not retype a definition that holds values. --force cannot do this; use a migration.',
+    '',
+  ].join('\n'));
 });
 
 const execFileAsync = promisify(execFile);

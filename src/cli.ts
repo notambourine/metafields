@@ -4,7 +4,7 @@ import { dirname, resolve } from 'node:path';
 import { AdminClient, DEFAULT_API_VERSION } from './admin.js';
 import { readAppConfig } from './app-config.js';
 import { mintAccessToken } from './auth.js';
-import { fleetExitCode, synchronizeFleet, type Connect, type FleetResult, type StoreTarget } from './fleet.js';
+import { fleetExitCode, synchronizeFleet, type Connect, type StoreTarget } from './fleet.js';
 import { generateSchemaModule } from './generator.js';
 import { descriptionViolations } from './limits.js';
 import { loadDefault, loadSchema } from './loader.js';
@@ -16,9 +16,9 @@ import {
   runMigration,
 } from './migration.js';
 import { emitLiquidMetafields, isLiquidMetafieldsFile } from './liquid.js';
-import { blockedAdvice, type DriftItem } from './changes.js';
-import type { PlanItem, SyncMode } from './planner.js';
+import type { SyncMode } from './planner.js';
 import { pullSchema } from './pull.js';
+import { renderFleet } from './render.js';
 import { compileSchema, OWNER_TYPES, SCHEMA_MARKER, stringifyCanonical, type Owner } from './schema.js';
 import { doctorExitCode, runDoctor, type DoctorReport } from './doctor.js';
 
@@ -360,58 +360,6 @@ function onlyPositional(args: Arguments, label: string): string {
 
 function output(args: Arguments, json: unknown, text: string): void {
   process.stdout.write(args.flags.has('json') ? stringifyCanonical(json) : text);
-}
-
-function renderFleet(result: FleetResult): string {
-  const lines: string[] = [];
-  for (const outcome of result.stores) {
-    if (outcome.status !== 'planned') {
-      const label = outcome.status === 'not-installed' ? 'NOT-INSTALLED' : 'UNREACHABLE';
-      lines.push(`${label} ${outcome.store} ${outcome.code ?? 'error'}: ${outcome.reason ?? ''}`.trimEnd());
-      continue;
-    }
-    lines.push(`STORE ${outcome.store}`);
-    for (const item of outcome.plan?.items ?? []) lines.push(...renderItem(item));
-    const updated = new Set(outcome.updated ?? []);
-    const skipped = new Set(outcome.skipped ?? []);
-    for (const entry of outcome.drift?.items ?? []) {
-      // The reasons are already above, under the plan item; only a refusal repeats one, next to
-      // the line that says what to do about it.
-      if (updated.has(entry.item.identity)) lines.push(`UPDATED ${entry.item.identity}`);
-      else if (!skipped.has(entry.item.identity)) lines.push(`UPDATE ${entry.item.identity}`);
-      else lines.push(...renderSkipped(entry));
-    }
-    for (const identity of outcome.created ?? []) lines.push(`CREATED ${identity}`);
-    if (outcome.refused !== undefined) lines.push(`REFUSED ${outcome.store}: ${outcome.refused}`);
-  }
-  lines.push('');
-  return lines.join('\n');
-}
-
-// The refusal carries the teaching, so the generic flag name costs nothing. BLOCKED matters
-// most: saying "--force cannot do this" is what stops someone reaching for it here.
-function renderSkipped(entry: DriftItem): string[] {
-  if (entry.blocked.length === 0) {
-    return [
-      `SKIPPED ${entry.item.identity}`,
-      ...entry.needsForce.map((reason) => `  ${reason}`),
-      '  re-run with --force to apply it',
-    ];
-  }
-  const advice = [...new Set(entry.blocked.map((reason) => blockedAdvice(entry.item, reason)))];
-  return [
-    `BLOCKED ${entry.item.identity}`,
-    ...entry.blocked.map((reason) => `  ${reason}`),
-    ...advice.map((line) => `  ${line}`),
-  ];
-}
-
-function renderItem(item: PlanItem): string[] {
-  return [
-    `${item.status} ${item.identity}`,
-    ...item.reasons.map((reason) => `  ${reason}`),
-    ...item.notices.map((notice) => `NOTICE ${notice}`),
-  ];
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

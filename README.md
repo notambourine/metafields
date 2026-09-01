@@ -97,6 +97,8 @@ type Faq = InferMetaobjects<typeof schema>['faq'];
 
 Fleet files contain one store per line and support `#` comments. Directly named stores fail when unreachable; swept stores without the app report `NOT-INSTALLED` and do not fail the fleet.
 
+Each store reports one line per definition it creates, updates, skips, or blocks, each naming the metafield type or metaobject field count, and counts the definitions that already match on the `STORE` line. Use `--json` for the complete plan.
+
 Pull requires explicit owners and namespaces, or their `--all-*` flags. It emits representable definitions and reports the rest under `skipped` and reserved namespaces under `excluded`. Without `--metaobjects`, metaobject references are skipped. Pull and compile never overwrite output files.
 
 Liquid output contains only editor-supported metafields. It omits metaobjects, customer and draft-order metafields, access, validation, constraints, and `required`. Emit overwrites only recognized generated output unless passed `--force`.
