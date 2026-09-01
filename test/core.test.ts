@@ -18,6 +18,7 @@ import {
   planSchema,
   transforms,
 } from '../dist/index.js';
+import { FIELD_CAPABILITIES, type FieldCapability } from '../dist/types.js';
 import { generateSchemaModule } from '../dist/generator.js';
 import { pullSchema } from '../dist/pull.js';
 import { loadSchema } from '../dist/loader.js';
@@ -156,6 +157,8 @@ test('what pull writes compiles, including the types the DSL learned to declare'
         { name: 'scale_min', value: '1' }, { name: 'scale_max', value: '5' },
       ] },
       { key: 'faq_ref', type: 'metaobject_reference', validations: [{ name: 'metaobject_definition_type', value: 'faq' }] },
+      { key: 'sheet', type: 'file_reference', validations: [{ name: 'file_type_options', value: '["Image"]' }] },
+      { key: 'site', type: 'url', validations: [{ name: 'allowed_domains', value: '["example.com"]' }] },
     ],
     [{ type: 'faq', name: 'FAQ', displayNameKey: 'question', fields: [
       { key: 'question', name: 'Question', type: { name: 'single_line_text_field' }, required: true, validations: [] },
@@ -170,7 +173,16 @@ test('what pull writes compiles, including the types the DSL learned to declare'
   ));
   const compiled = await loadSchema(target);
   assert.deepEqual(compiled.metafields.map((item) => item.type).sort(), [
-    'dimension', 'list.single_line_text_field', 'metaobject_reference', 'money', 'rating',
+    'dimension', 'file_reference', 'list.single_line_text_field', 'metaobject_reference', 'money',
+    'rating', 'url',
+  ]);
+  // The validations that restrict what a reference or link may hold survive the round trip, so a
+  // pulled schema is not quieter than the store it came from.
+  assert.deepEqual(compiled.metafields.find((item) => item.key === 'sheet')?.validations, [
+    { name: 'file_type_options', value: '["Image"]' },
+  ]);
+  assert.deepEqual(compiled.metafields.find((item) => item.key === 'site')?.validations, [
+    { name: 'allowed_domains', value: '["example.com"]' },
   ]);
   assert.deepEqual(compiled.metafields.find((item) => item.key === 'stars')?.validations, [
     { name: 'scale_min', value: '1' }, { name: 'scale_max', value: '5' },
@@ -184,6 +196,22 @@ test('what pull writes compiles, including the types the DSL learned to declare'
 test('loads a TypeScript schema module with Node type stripping', async () => {
   const loaded = await loadSchema('./test/fixture-schema.ts');
   assert.equal(loaded.metaobjects[0].type, 'faq');
+});
+
+// The round trip this guards: a capability the DSL accepts but pull cannot write disappears from
+// the pulled schema and comes back as drift on the operator's next sync.
+test('every capability the DSL accepts survives compile and pull', () => {
+  const all = Object.fromEntries(FIELD_CAPABILITIES.map((name) => [name, true])) as
+    Record<FieldCapability, boolean>;
+  const compiled = compileSchema(defineSchema({
+    metaobjects: {},
+    metafields: { product: { custom: { promo_text: field.string(all) } } },
+  }));
+  assert.deepEqual(compiled.metafields[0].capabilities, all);
+  const { module } = generateSchemaModule(pulled([
+    { key: 'promo_text', type: 'single_line_text_field', capabilities: all },
+  ]));
+  for (const name of FIELD_CAPABILITIES) assert.match(module, new RegExp(`\\b${name}: true\\b`));
 });
 
 test('generated pull output is deterministic and uses json unknown', () => {
@@ -206,19 +234,21 @@ test('pull writes what it can declare and reports the rest as skipped', () => {
   const { module, skipped } = generateSchemaModule(pulled([
     { key: 'promo_text', name: 'Promo text', type: 'single_line_text_field' },
     { key: 'catalog', type: 'product_taxonomy_value_reference' },
-    { key: 'sheet', type: 'file_reference', validations: [{ name: 'file_type_options', value: '["Image"]' }] },
+    // A validation Shopify adds after this release shipped, which the coverage test turns into a
+    // failing check on the next refresh but a running install can only report.
+    { key: 'oddity', type: 'single_line_text_field', validations: [{ name: 'newly_added', value: 'x' }] },
     // Nothing named the metaobject, because this pull did not ask for metaobjects.
     { key: 'faq_ref', type: 'metaobject_reference', validations: [{ name: 'metaobject_definition_type', value: 'faq' }] },
   ]));
   assert.match(module, /promo_text: field\.string\(\{ name: "Promo text" \}\)/);
   assert.deepEqual(skipped.map((entry) => entry.identity), [
-    'product:custom.catalog', 'product:custom.faq_ref', 'product:custom.sheet',
+    'product:custom.catalog', 'product:custom.faq_ref', 'product:custom.oddity',
   ]);
   assert.match(skipped[0].reason, /cannot declare product_taxonomy_value_reference/);
   assert.match(skipped[1].reason, /references faq, which this pull did not write/);
   // A definition quieter than the store is not a schema anyone can apply, so the validation the
   // DSL cannot state takes the field with it.
-  assert.match(skipped[2].reason, /no option declares the file_type_options validation/);
+  assert.match(skipped[2].reason, /no option declares the newly_added validation/);
   assert.match(module, /^\/\/ Pulled without 3 definition\(s\) this release cannot declare:\n/);
 });
 

@@ -1,7 +1,7 @@
-import { baseType, builderFor, VALIDATION_OPTIONS } from './declarable.js';
+import { baseType, builderFor, REFERENCE_VALIDATIONS, VALIDATION_OPTIONS } from './declarable.js';
 import type { ExistingField, ExistingMetafield, ExistingMetaobject } from './planner.js';
 import { isReservedNamespace, type Owner } from './schema.js';
-import type { Validation } from './types.js';
+import { FIELD_CAPABILITIES, type Validation } from './types.js';
 
 export interface PulledSchema {
   metaobjects: ExistingMetaobject[];
@@ -67,9 +67,7 @@ function options(
     if (access.length > 0) result.push(`access: { ${access.join(', ')} }`);
   }
   if (attributes && !metaobjectField && 'capabilities' in field && field.capabilities) {
-    for (const key of [
-      'adminFilterable', 'analyticsQueryable', 'cartToOrderCopyable', 'smartCollectionCondition', 'uniqueValues',
-    ] as const) {
+    for (const key of FIELD_CAPABILITIES) {
       if (field.capabilities[key] !== undefined) result.push(`${key}: ${String(field.capabilities[key])}`);
     }
   }
@@ -82,9 +80,6 @@ function options(
 // The pulled definition says nothing about the shape behind a json value, so the generic stays
 // unknown for the operator to narrow.
 const TYPE_ARGUMENTS: Record<string, string> = { json: '<unknown>' };
-
-// Reference targets become builder arguments rather than options.
-const REFERENCE_VALIDATIONS = new Set(['metaobject_definition_type', 'metaobject_definition_types']);
 
 type Expression = { code: string; reason?: undefined } | { code?: undefined; reason: string };
 

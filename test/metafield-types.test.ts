@@ -1,7 +1,15 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { METAFIELD_OWNER_TYPES, METAFIELD_TYPES, compileSchema, defineSchema, field, metaobject } from '../dist/index.js';
-import { baseType, BUILDERS, DECLINED, declarability } from '../dist/declarable.js';
+import {
+  baseType,
+  BUILDERS,
+  DECLINED,
+  DECLINED_VALIDATIONS,
+  REFERENCE_VALIDATIONS,
+  VALIDATION_OPTIONS,
+  declarability,
+} from '../dist/declarable.js';
 import { OWNER_TYPES } from '../dist/schema.js';
 
 type Factory = (...args: never[]) => { type: string };
@@ -41,6 +49,32 @@ test('every Shopify type is either declarable or declined on purpose', () => {
     [],
     'add a builder for these in src/builders.ts and src/declarable.ts, or decline them in DECLINED with a reason',
   );
+});
+
+// The type table alone is not enough: a type a builder declares still loses its fields when the
+// store puts a validation on them that no option states, which pull can only report as a skip.
+test('every validation a declarable type supports is either an option or declined on purpose', () => {
+  const carriers = new Map<string, string[]>();
+  for (const [type, info] of Object.entries(METAFIELD_TYPES)) {
+    const declares = declarability(type);
+    if (!declares || 'declined' in declares) continue;
+    for (const validation of info.validations.map(baseType)) {
+      if (validation in VALIDATION_OPTIONS || REFERENCE_VALIDATIONS.has(validation)) continue;
+      if (validation in DECLINED_VALIDATIONS) continue;
+      carriers.set(validation, [...carriers.get(validation) ?? [], type]);
+    }
+  }
+  assert.deepEqual(
+    [...carriers].map(([validation, types]) => `${validation} (on ${types.join(', ')})`).sort(),
+    [],
+    'add an option for these in src/builders.ts and VALIDATION_OPTIONS, or decline them in DECLINED_VALIDATIONS with a reason',
+  );
+  for (const validation of Object.keys(DECLINED_VALIDATIONS)) {
+    const published = Object.values(METAFIELD_TYPES)
+      .some((info) => info.validations.map(baseType).includes(validation));
+    assert.ok(published, `${validation} is declined but Shopify no longer publishes it`);
+    assert.equal(VALIDATION_OPTIONS[validation], undefined, `${validation} is both declined and an option`);
+  }
 });
 
 test('the declined types are ones Shopify still publishes and no builder claims', () => {
@@ -85,7 +119,9 @@ test('the validations the builders emit are supported by the types that carry th
           shade: field.color(),
           shipping_weight: field.measurement('weight', { min: { value: 1, unit: 'kg' } }),
           external_id: field.id({ regex: '^[0-9]+$' }),
-          manual: field.link(),
+          manual: field.link({ allowedDomains: ['example.com'] }),
+          site: field.url({ allowedDomains: ['example.com'] }),
+          sheet: field.file({ fileTypes: ['Image'] }),
           locale: field.language(),
           region: field.jurisdiction(),
           related: field.list(field.product(), { min: 1, max: 3 }),
