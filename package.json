@@ -1,6 +1,6 @@
 {
   "name": "@notambourine/metafields",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Create-only Shopify custom-data schema CLI",
   "type": "module",
   "license": "MIT",

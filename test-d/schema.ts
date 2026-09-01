@@ -5,8 +5,22 @@ import {
   type Decimal,
   type InferMetafields,
   type InferMetaobjects,
+  type Measurement,
   type MetaobjectReference,
 } from '../src/index.js';
+
+const measurements = defineSchema({
+  metaobjects: {},
+  metafields: {
+    product: {
+      custom: {
+        span: field.measurement('dimension', { min: { value: 1, unit: 'in' } }),
+        price: field.money(),
+        stars: field.rating({ scaleMin: 1, scaleMax: 5 }),
+      },
+    },
+  },
+});
 
 const schema = defineSchema({
   metaobjects: {
@@ -72,3 +86,12 @@ defineSchema({
 
 // @ts-expect-error numeric validations do not accept regex
 field.integer({ regex: '^1$' });
+
+// @ts-expect-error a rating carries the scale it was recorded on
+field.rating({ scaleMin: 1 });
+
+// @ts-expect-error the measurement type comes from the generated registry
+field.measurement('furlongs');
+
+const measured: Measurement | undefined = ({} as InferMetafields<typeof measurements>).product.custom.span;
+void measured;

@@ -151,6 +151,14 @@ npx @notambourine/metafields pull \
 Owners and namespaces must be explicit unless their corresponding `--all-owners` or
 `--all-namespaces` flag is passed. The output path must not exist; omit `--out` to write to stdout.
 
+Pull is lossy by design: Shopify serves more metafield types than a portable schema can declare, so
+it writes every definition it can and names the rest rather than refusing the store. Left-out
+identities arrive under `skipped`, next to the reserved-namespace definitions under `excluded`, and
+the generated file lists them with a reason in a comment at the top. A definition is skipped when
+no builder declares its type, when it carries a validation no option can state, or when it
+references a metaobject the same run did not write, which is every metaobject reference when
+`--metaobjects` is absent.
+
 Generate Liquid editor metadata from the schema:
 
 ```sh
@@ -161,6 +169,19 @@ npx @notambourine/metafields emit ./schema.ts \
 The generated file supports Liquid completion and hover without a store login. It cannot represent
 metaobjects, `required`, validations, access, customer metafields, or draft-order metafields.
 `emit` refuses to replace a file it did not generate unless passed `--force`.
+
+## Field types
+
+Scalars are `string()`, `text()`, `richText()`, `integer()`, `decimal()`, `boolean()`, `url()`,
+`json()`, `money()`, `color()`, `date()`, `dateTime()`, `rating()`, `link()`, `id()`, `language()`,
+`jurisdiction()`, and `measurement()`, which names its unit type: `field.measurement('weight')`.
+References are `product()`, `variant()`, `collection()`, `file()`, `article()`, `page()`, `order()`,
+`customer()`, `company()`, `metaobject()`, and `mixedMetaobject()`. Wrap any of them in
+`field.list()` where Shopify publishes a list counterpart.
+
+Shopify's disclosure and product-taxonomy references are the exception. Each points at a definition
+or taxonomy handle Shopify owns on the store itself, which no schema can create or carry to another
+store, so no builder declares them and `pull` reports them as skipped.
 
 ## Types
 

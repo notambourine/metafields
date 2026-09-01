@@ -64,8 +64,8 @@ jobs:
           the pinned Admin API version.
 
           Regenerate it with \`npm run generate:metafield-types\` and ship the result with a version
-          bump. Check the diff for new types the schema builders do not handle yet; that is the
-          case this check exists to catch.
+          bump. If a new type has no builder, \`npm test\` fails on the type-coverage check until it
+          gains one or is declined in \`DECLINED\` with a reason.
 
           Detected by [this run]($RUN). Closes automatically when the check next passes.
           EOF
