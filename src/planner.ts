@@ -150,14 +150,14 @@ function compareField(
 }
 
 function cosmeticNotices(
-  identity: string,
+  path: string,
   desired: { name: string; description?: string },
   existing: { name: string; description?: string | null | undefined },
 ): string[] {
   const notices: string[] = [];
-  if (desired.name !== existing.name) notices.push(`${identity}.name differs`);
+  if (desired.name !== existing.name) notices.push(`${path}.name differs`);
   if (desired.description !== undefined && desired.description !== (existing.description ?? undefined)) {
-    notices.push(`${identity}.description differs`);
+    notices.push(`${path}.description differs`);
   }
   return notices;
 }
@@ -178,18 +178,23 @@ export function planSchema(desired: CompiledSchema, existing: ExistingSchema): P
     }
     compareDeclared('access', definition.access, found.access, reasons);
     compareDeclared('capabilities', definition.capabilities, found.capabilities, reasons);
+    const notices = cosmeticNotices(identity, definition, found);
     const fields = new Map(found.fields.map((field) => [field.key, field]));
     for (const field of definition.fields) {
       const existingField = fields.get(field.key);
-      if (!existingField) reasons.push(`fields.${field.key}: missing`);
-      else reasons.push(...compareField(field, existingField, `fields.${field.key}`));
+      if (!existingField) {
+        reasons.push(`fields.${field.key}: missing`);
+        continue;
+      }
+      reasons.push(...compareField(field, existingField, `fields.${field.key}`));
+      notices.push(...cosmeticNotices(`fields.${field.key}`, field, existingField));
     }
     items.push({
       kind: 'metaobject',
       identity,
       status: reasons.length > 0 ? 'CONFLICT' : 'PRESENT',
       reasons,
-      notices: cosmeticNotices(identity, definition, found),
+      notices,
       desired: definition,
       existing: found,
     });

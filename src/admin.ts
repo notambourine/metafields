@@ -389,13 +389,15 @@ function metaobjectUpdateInput(entry: DriftItem, force: boolean): Record<string,
     input.capabilities = capabilityInput(definition.capabilities);
   }
   const missing = new Set<string>();
-  const drifted = new Set<string>();
+  const drifted = new Map<string, string[]>();
   for (const path of paths) {
     const added = /^fields\.([^.]+): missing$/.exec(path);
     if (added?.[1] !== undefined) missing.add(added[1]);
     else {
-      const changed = /^fields\.([^.]+)\./.exec(path);
-      if (changed?.[1] !== undefined) drifted.add(changed[1]);
+      const changed = /^fields\.([^.]+)\.(.+)$/.exec(path);
+      if (changed?.[1] !== undefined && changed[2] !== undefined) {
+        drifted.set(changed[1], [...drifted.get(changed[1]) ?? [], changed[2]]);
+      }
     }
   }
   const declared = new Map(definition.fields.map((field) => [field.key, field]));
@@ -404,9 +406,13 @@ function metaobjectUpdateInput(entry: DriftItem, force: boolean): Record<string,
     const field = declared.get(key);
     if (field) operations.push({ create: fieldCreateInput(field) });
   }
-  for (const key of [...drifted].sort()) {
+  for (const [key, changed] of [...drifted].sort(([a], [b]) => a.localeCompare(b))) {
     const field = missing.has(key) ? undefined : declared.get(key);
-    if (field) operations.push({ update: fieldUpdateInput(field) });
+    if (!field) continue;
+    const update = fieldUpdateInput(field, changed);
+    // `key` alone identifies the field, so an input holding nothing else is a write with no
+    // opinion; Shopify would accept it and the operator would read it as a change.
+    if (Object.keys(update).length > 1) operations.push({ update });
   }
   if (operations.length > 0) input.fieldDefinitions = operations;
   return input;
@@ -426,16 +432,24 @@ function addLabels(
 }
 
 function fieldCreateInput(field: CanonicalField): Record<string, unknown> {
-  return { key: field.key, type: field.type, ...fieldUpdateInput(field) };
+  const input: Record<string, unknown> = { key: field.key, type: field.type, name: field.name };
+  if (field.description !== undefined) input.description = field.description;
+  if (field.required !== undefined) input.required = field.required;
+  if (field.validations.length > 0) input.validations = field.validations;
+  return input;
 }
 
-// No `type`: Shopify will not retype a field, and no `delete` operation is ever emitted.
-function fieldUpdateInput(field: CanonicalField): Record<string, unknown> {
-  const result: Record<string, unknown> = { key: field.key, name: field.name };
-  if (field.description !== undefined) result.description = field.description;
-  if (field.required !== undefined) result.required = field.required;
-  if (field.validations.length > 0) result.validations = field.validations;
-  return result;
+// Scoped the same way a definition update is: only the attributes the plan reported drifted, so
+// relabelling a field never restates its validations or required flag. No `type` (Shopify will
+// not retype a field) and no `delete` operation is ever emitted.
+function fieldUpdateInput(field: CanonicalField, paths: readonly string[]): Record<string, unknown> {
+  const input: Record<string, unknown> = { key: field.key };
+  addLabels(input, paths, field);
+  if (paths.some((path) => path.startsWith('required:')) && field.required !== undefined) {
+    input.required = field.required;
+  }
+  if (paths.includes('validations differ')) input.validations = field.validations;
+  return input;
 }
 
 function metaobjectCreateInput(definition: CanonicalMetaobject): Record<string, unknown> {

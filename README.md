@@ -55,7 +55,7 @@ Each definition is atomic: if one attribute is blocked, its other changes wait. 
 | Change | Required mode |
 | --- | --- |
 | Create a definition or add a field | `--apply` |
-| Change labels, `displayNameKey`, or enable a capability | `--apply` |
+| Change a definition or field label, `displayNameKey`, or enable a capability | `--apply` |
 | Change access, validation, constraints, `required`, or disable a capability | `--apply --force` |
 | Delete, retype, override invalid values, or bypass Shopify validation | Unsupported |
 
