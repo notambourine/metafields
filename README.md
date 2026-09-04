@@ -1,6 +1,6 @@
 # @notambourine/metafields
 
-Version Shopify metafield and metaobject definitions in TypeScript, preview store drift, and apply supported changes. The CLI never deletes or retypes definitions. Requires Node.js 22.18+.
+Define Shopify metafields and metaobjects in TypeScript. Preview store drift and apply supported changes. The CLI does not delete or retype definitions. Requires Node.js 22.18+.
 
 ## Define and sync a schema
 
@@ -42,7 +42,7 @@ npx metafields ./schema.ts --store example.myshopify.com
 npx metafields ./schema.ts --store example.myshopify.com --apply
 ```
 
-Schema modules execute as trusted local code. For untrusted declarations, compile before introducing credentials:
+Schema modules execute as local code. Compile untrusted declarations before setting credentials:
 
 ```sh
 npx metafields compile ./schema.ts --out ./schema.json
@@ -50,7 +50,7 @@ npx metafields compile ./schema.ts --out ./schema.json
 
 ## Change policy
 
-Each definition is atomic: if one attribute is blocked, its other changes wait. Other definitions continue independently.
+Updates are atomic per definition. One blocked attribute defers the entire definition. Other definitions continue.
 
 | Change | Required mode |
 | --- | --- |
@@ -59,9 +59,9 @@ Each definition is atomic: if one attribute is blocked, its other changes wait. 
 | Change access, validation, constraints, `required`, or disable a capability | `--apply --force` |
 | Delete, retype, override invalid values, or bypass Shopify validation | Unsupported |
 
-`--force` accepts storefront and stored-value risk; it does not override Shopify. `--dry-run` cancels requested writes without changing the plan or exit code. Mutations retry only Shopify's explicit `THROTTLED` response because retrying ambiguous failures could duplicate a completed write.
+`--force` permits storefront and stored-value risk but cannot override Shopify. `--dry-run` cancels writes without changing the plan or exit code. Mutations retry only Shopify's explicit `THROTTLED` response; retrying ambiguous failures could duplicate a completed write.
 
-Exit codes describe store state: `0` matches, `1` has actionable drift, and `2` is invalid, indeterminate, or failed. Cosmetic label drift does not fail. Migration code `1` means rows remain pending.
+Exit codes describe store state: `0` matches, `1` has actionable drift, and `2` is invalid, indeterminate, or failed. Cosmetic label drift does not fail. Migration exit code `1` means rows remain pending.
 
 ## Schema API
 
@@ -73,9 +73,9 @@ Field builders:
 
 Options are type-checked by each builder. Examples include `field.measurement('weight')`, `field.file({ fileTypes: ['Image'] })`, and `field.url({ allowedDomains: ['example.com'] })`.
 
-A metaobject field takes `adminFilterable` but not `access`, `constraints`, or the other capabilities, which Shopify keeps on metafield definitions alone. Declaring one of those on a metaobject field is rejected at compile rather than planned as drift no apply could clear.
+A metaobject field supports `adminFilterable`, but not `access`, `constraints`, or metafield-only capabilities. Compilation rejects unsupported options.
 
-Metaobject references name portable types in the schema; the CLI resolves their store-specific IDs and creates dependencies first. Shopify-owned disclosure and taxonomy references are not portable and cannot be declared.
+Metaobject references use portable types. The CLI resolves store-specific IDs and creates dependencies first. Shopify-owned disclosure and taxonomy references cannot be declared portably.
 
 Infer application types directly from the schema:
 
@@ -97,23 +97,23 @@ type Faq = InferMetaobjects<typeof schema>['faq'];
 | Check the Shopify API type registry | `npx metafields doctor --api-version 2026-07` |
 | Print all commands and options | `npx metafields --help` |
 
-Fleet files contain one store per line and support `#` comments. Directly named stores fail when unreachable; swept stores without the app report `NOT-INSTALLED` and do not fail the fleet.
+Fleet files contain one store per line and support `#` comments. Unreachable explicit stores fail. Swept stores without the app report `NOT-INSTALLED` without failing the fleet.
 
-Each store reports one line per definition it creates, updates, skips, or blocks, each naming the metafield type or metaobject field count, and counts the definitions that already match on the `STORE` line. `--json` reports the same decisions as an object, carrying every definition's status, reasons, and drift buckets without echoing back the schema you passed in.
+Each store reports created, updated, skipped, or blocked definitions with their metafield type or metaobject field count. The `STORE` line counts matching definitions. `--json` includes each definition's status, reasons, and drift buckets without repeating the input schema.
 
-Pull requires explicit owners and namespaces, or their `--all-*` flags. It emits representable definitions and reports the rest under `skipped` and reserved namespaces under `excluded`. Without `--metaobjects`, metaobject references are skipped. Pull and compile never overwrite output files.
+Pull requires explicit owners and namespaces or their `--all-*` flags. It reports unrepresentable definitions under `skipped` and reserved namespaces under `excluded`. Without `--metaobjects`, it skips metaobject references. Pull and compile do not overwrite output files.
 
-Liquid output contains only editor-supported metafields. It omits metaobjects, customer and draft-order metafields, access, validation, constraints, and `required`. Emit overwrites only recognized generated output unless passed `--force`.
+Liquid output includes only editor-supported metafields. It omits metaobjects, customer and draft-order metafields, access, validation, constraints, and `required`. Emit overwrites recognized generated output; other files require `--force`.
 
 ## Authentication and output
 
-For one store, set `SHOPIFY_ADMIN_ACCESS_TOKEN`. For one store or a fleet, set `SHOPIFY_APP_CLIENT_ID` and `SHOPIFY_APP_SECRET`; the CLI mints a short-lived token per store. The client ID resolves from `--client-id`, `--app-config`, then the environment. Complete app credentials take priority over a static token, and credentials are redacted from errors.
+For one store, set `SHOPIFY_ADMIN_ACCESS_TOKEN`. For one store or a fleet, set `SHOPIFY_APP_CLIENT_ID` and `SHOPIFY_APP_SECRET`; the CLI creates a short-lived token per store. The client ID resolves from `--client-id`, `--app-config`, then the environment. Complete app credentials take priority over a static token. Errors redact credentials.
 
-Operational commands support `--json`, producing one JSON object on stdout. In text mode, generated documents use stdout while `excluded` and `skipped` identities use stderr. `--out` reports a small written status instead of the document.
+Operational commands support `--json` and write one JSON object to stdout. In text mode, generated documents use stdout while `excluded` and `skipped` identities use stderr. With `--out`, the CLI reports the written path instead of the document.
 
 ## Copy values to a replacement definition
 
-Migrations copy values; they never retype or delete the source. Define endpoints from the schema and use a package transform:
+Migrations copy values without retyping or deleting the source. Define endpoints from the schema and use a package transform:
 
 ```ts
 import { defineMigration, transforms } from '@notambourine/metafields';

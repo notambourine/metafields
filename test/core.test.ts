@@ -98,8 +98,6 @@ function metaobjectField(options: Record<string, unknown>) {
   });
 }
 
-// Every one of these describes something the metaobject field definition input cannot carry, so
-// compiling one would plan drift on every run that no apply could clear.
 test('runtime validation rejects metafield-only options on a metaobject field', () => {
   const declined: Record<string, unknown>[] = [
     { access: { storefront: 'public_read' } },
@@ -114,12 +112,10 @@ test('runtime validation rejects metafield-only options on a metaobject field', 
       new RegExp(`fields\\.question\\.${Object.keys(options)[0] as string}: cannot be declared`),
     );
   }
-  // The capabilities Shopify does take there are the whole point of the split.
   for (const capability of METAOBJECT_FIELD_CAPABILITIES) {
     const compiled = compileSchema(metaobjectField({ [capability]: true }));
     assert.equal(compiled.metaobjects[0]?.fields[0]?.capabilities?.[capability], true);
   }
-  // The declined options on a metafield are what they exist for.
   assert.doesNotThrow(() => compileSchema(defineSchema({
     metaobjects: {},
     metafields: { product: { custom: { promo: field.string({ access: { storefront: 'public_read' }, uniqueValues: true }) } } },
@@ -178,9 +174,7 @@ function pulled(fields: Record<string, unknown>[], metaobjects: Record<string, u
   };
 }
 
-// Pull is only as good as what it writes: a module that cannot be compiled is the same failure as
-// the abort it replaced, one file later.
-test('what pull writes compiles, including the types the DSL learned to declare', async () => {
+test('pulled modules compile for all supported types', async () => {
   const { module } = generateSchemaModule(pulled(
     [
       { key: 'price', name: 'Price', type: 'money', access: { admin: 'MERCHANT_READ_WRITE' } },
@@ -211,8 +205,6 @@ test('what pull writes compiles, including the types the DSL learned to declare'
     'dimension', 'file_reference', 'list.single_line_text_field', 'metaobject_reference', 'money',
     'rating', 'url',
   ]);
-  // The validations that restrict what a reference or link may hold survive the round trip, so a
-  // pulled schema is not quieter than the store it came from.
   assert.deepEqual(compiled.metafields.find((item) => item.key === 'sheet')?.validations, [
     { name: 'file_type_options', value: '["Image"]' },
   ]);
@@ -233,9 +225,7 @@ test('loads a TypeScript schema module with Node type stripping', async () => {
   assert.equal(loaded.metaobjects[0].type, 'faq');
 });
 
-// The round trip this guards: a capability the DSL accepts but pull cannot write disappears from
-// the pulled schema and comes back as drift on the operator's next sync.
-test('every capability the DSL accepts survives compile and pull', () => {
+test('supported capabilities survive compile and pull', () => {
   const all = Object.fromEntries(FIELD_CAPABILITIES.map((name) => [name, true])) as
     Record<FieldCapability, boolean>;
   const compiled = compileSchema(defineSchema({
@@ -249,7 +239,7 @@ test('every capability the DSL accepts survives compile and pull', () => {
   for (const name of FIELD_CAPABILITIES) assert.match(module, new RegExp(`\\b${name}: true\\b`));
 });
 
-test('generated pull output is deterministic and uses json unknown', () => {
+test('pull output is deterministic and types JSON as unknown', () => {
   const { module, skipped } = generateSchemaModule(pulled([
     { key: 'payload', name: 'Payload', type: 'json' },
     { key: 'price', name: 'Price', type: 'money' },
@@ -263,31 +253,24 @@ test('generated pull output is deterministic and uses json unknown', () => {
   assert.match(module, /stars: field\.rating\(\{ name: "Field", scaleMin: 1, scaleMax: 5 \}\)/);
 });
 
-// The catch-22 this replaces: one undeclarable type aborted the read, and the only way around it
-// aborted the read the other way.
-test('pull writes what it can declare and reports the rest as skipped', () => {
+test('pull emits supported definitions and reports skipped definitions', () => {
   const { module, skipped } = generateSchemaModule(pulled([
     { key: 'promo_text', name: 'Promo text', type: 'single_line_text_field' },
     { key: 'catalog', type: 'product_taxonomy_value_reference' },
-    // A validation Shopify adds after this release shipped, which the coverage test turns into a
-    // failing check on the next refresh but a running install can only report.
     { key: 'oddity', type: 'single_line_text_field', validations: [{ name: 'newly_added', value: 'x' }] },
-    // Nothing named the metaobject, because this pull did not ask for metaobjects.
     { key: 'faq_ref', type: 'metaobject_reference', validations: [{ name: 'metaobject_definition_type', value: 'faq' }] },
   ]));
   assert.match(module, /promo_text: field\.string\(\{ name: "Promo text" \}\)/);
   assert.deepEqual(skipped.map((entry) => entry.identity), [
     'product:custom.catalog', 'product:custom.faq_ref', 'product:custom.oddity',
   ]);
-  assert.match(skipped[0].reason, /cannot declare product_taxonomy_value_reference/);
-  assert.match(skipped[1].reason, /references faq, which this pull did not write/);
-  // A definition quieter than the store is not a schema anyone can apply, so the validation the
-  // DSL cannot state takes the field with it.
-  assert.match(skipped[2].reason, /no option declares the newly_added validation/);
-  assert.match(module, /^\/\/ Pulled without 3 definition\(s\) this release cannot declare:\n/);
+  assert.match(skipped[0].reason, /unsupported type: product_taxonomy_value_reference/);
+  assert.match(skipped[1].reason, /missing referenced metaobject: faq/);
+  assert.match(skipped[2].reason, /unsupported newly_added validation/);
+  assert.match(module, /^\/\/ Omitted 3 unsupported definition\(s\)\. See pull diagnostics\.\n/);
 });
 
-test('a metaobject left with no declarable field is dropped, and so is what referenced it', () => {
+test('pull drops empty metaobjects and their references', () => {
   const { module, skipped } = generateSchemaModule(pulled(
     [
       { key: 'faq_ref', type: 'metaobject_reference', validations: [{ name: 'metaobject_definition_type', value: 'faq' }] },
@@ -307,15 +290,11 @@ test('a metaobject left with no declarable field is dropped, and so is what refe
     'metaobject:card', 'metaobject:faq.legal', 'product:custom.card_ref',
   ]);
   assert.match(module, /answer: field\.richText\(\{ name: "Answer" \}\)/);
-  // Options follow the referenced type instead of being dropped for want of an empty pair of parens.
   assert.match(module, /faq_ref: field\.metaobject\("faq", \{ name: "Field" \}\)/);
-  // The display key named the field this file could not declare, so keeping it would not compile.
   assert.doesNotMatch(module, /displayNameKey/);
 });
 
-// The reported repro: a live store whose metaobject fields are money-typed. 0.2.0 aborted with
-// --metaobjects on the type and aborted without it on the reference, leaving no way to read it.
-test('pull reads a store with a money-typed metaobject field, in either direction', async () => {
+test('pull reads money metaobject fields with or without metaobjects', async () => {
   const definitions = {
     metafieldDefinitions: {
       nodes: [{
@@ -366,21 +345,18 @@ test('pull reads a store with a money-typed metaobject field, in either directio
   const full = generateSchemaModule(await pullSchema(client, { ...options, metaobjects: true }));
   assert.deepEqual(full.skipped, []);
   assert.match(full.module, /price: field\.money\(\{ name: "Price" \}\)/);
-  // A metaobject field carries the one capability Shopify keeps there, and none of the rest.
   assert.match(full.module, /label: field\.string\(\{ name: "Label", required: true, adminFilterable: true \}\)/);
   assert.match(full.module, /chain: field\.metaobject\("chain_length", \{ name: "Chain", access: \{ storefront: "public_read" \}/);
 
-  // Without --metaobjects the reference has nothing to name, so the definition carries the advice
-  // that used to be an abort.
   const partial = generateSchemaModule(await pullSchema(client, { ...options, metaobjects: false }));
   assert.deepEqual(partial.skipped, [{
     identity: 'product:custom.chain',
-    reason: 'metaobject_reference names a definition id this store owns; rerun pull with --metaobjects to resolve it',
+    reason: 'metaobject_reference uses a store-specific definition ID; pass --metaobjects to resolve it',
   }]);
   assert.match(partial.module, /export default defineSchema\(\{/);
 });
 
-test('liquid emit maps owner handles and drops owners the language server cannot group', () => {
+test('Liquid output maps supported owners and omits unsupported owners', () => {
   const { definitions, skipped } = emitLiquidMetafields(compileSchema(defineSchema({
     metaobjects: {},
     metafields: {
@@ -400,7 +376,7 @@ test('liquid emit maps owner handles and drops owners the language server cannot
   assert.deepEqual(skipped, ['customer:custom.tier']);
 });
 
-test('CLI emit writes a metafields file and refuses to clobber unrelated content', async () => {
+test('CLI emit writes metafields output without overwriting unrelated files', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'metafields-emit-'));
   const target = join(directory, '.shopify', 'metafields.json');
   const run = (...extra: string[]) => execFileAsync(process.execPath, [
@@ -412,7 +388,6 @@ test('CLI emit writes a metafields file and refuses to clobber unrelated content
   await run();
   await writeFile(target, 'theme source, not generated\n');
   await assert.rejects(run(), /is not a generated metafields file/);
-  // --force overrides the tool's own judgment here too, and needs no --apply to do it.
   await run('--force');
   assert.match(await readFile(target, 'utf8'), /faq_ref/);
 });
@@ -444,7 +419,7 @@ test('CLI validates without store credentials and emits one JSON result', async 
   assert.deepEqual(JSON.parse(stdout), { status: 'valid', metaobjects: 1, metafields: 1 });
 });
 
-test('CLI compile answers with one JSON object and refuses to clobber --out', async () => {
+test('CLI compile returns one JSON object and preserves existing output', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'metafields-compile-'));
   const run = (...extra: string[]) => execFileAsync(process.execPath, [
     './dist/cli.js', 'compile', './test/fixture-schema.ts', ...extra,
@@ -465,7 +440,7 @@ test('CLI compile answers with one JSON object and refuses to clobber --out', as
   await assert.rejects(run('--out', plain), /EEXIST/);
 });
 
-test('CLI emit puts left-out identities in the object under --json and on stderr without it', async () => {
+test('CLI emit reports omissions in JSON or stderr', async () => {
   const run = (...extra: string[]) => execFileAsync(process.execPath, [
     './dist/cli.js', 'emit', './test/fixture-skipped.ts', '--liquid', ...extra,
   ]);
@@ -476,7 +451,6 @@ test('CLI emit puts left-out identities in the object under --json and on stderr
   assert.deepEqual(envelope.skipped, ['customer:custom.tier']);
   assert.equal(envelope.definitions.product?.[0]?.key, 'blurb');
 
-  // Without --json the same identities leave stdout holding only the document.
   const streamed = await run();
   assert.equal(streamed.stderr, 'SKIPPED customer:custom.tier\n');
   assert.deepEqual(Object.keys(JSON.parse(streamed.stdout) as object), ['product']);

@@ -14,7 +14,6 @@ import { OWNER_TYPES } from '../dist/schema.js';
 
 type Factory = (...args: never[]) => { type: string };
 
-// The arguments each builder needs before it can name its type. Everything else takes none.
 function sample(name: string): { type: string } {
   if (name === 'metaobject') return field.metaobject('faq');
   if (name === 'mixedMetaobject') return field.mixedMetaobject(['faq']);
@@ -23,24 +22,19 @@ function sample(name: string): { type: string } {
   return (field as unknown as Record<string, Factory>)[name]!();
 }
 
-// Shopify publishes no list counterpart for these; fixing field.list() requires a breaking
-// FieldDefinition type change.
 const NOT_LISTABLE = ['boolean', 'id', 'json', 'language', 'money', 'multi_line_text_field', 'rich_text_field'];
 
-test('every builder the table names produces the type it is filed under', () => {
+test('registered builders produce their assigned types', () => {
   for (const [type, name] of Object.entries(BUILDERS)) {
     const factory = (field as unknown as Record<string, unknown>)[name];
-    assert.equal(typeof factory, 'function', `the table names field.${name}(), which does not exist`);
-    assert.equal(sample(name).type, type, `field.${name}() no longer builds ${type}`);
+    assert.equal(typeof factory, 'function', `missing builder: field.${name}()`);
+    assert.equal(sample(name).type, type, `field.${name}() must build ${type}`);
     assert.ok(type in METAFIELD_TYPES, `field.${name}() builds unknown type ${type}`);
   }
   assert.equal(field.measurement('weight').type, 'weight');
 });
 
-// The bug this guards: pull reads every type Shopify serves, but can only write the ones a schema
-// can declare. A type that is neither declarable nor deliberately declined reaches an operator as
-// a definition their pulled schema silently lacks.
-test('every Shopify type is either declarable or declined on purpose', () => {
+test('every Shopify type is supported or explicitly omitted', () => {
   const unaccounted = [...new Set(Object.keys(METAFIELD_TYPES).map(baseType))]
     .filter((type) => declarability(type) === undefined)
     .sort();
@@ -51,9 +45,7 @@ test('every Shopify type is either declarable or declined on purpose', () => {
   );
 });
 
-// The type table alone is not enough: a type a builder declares still loses its fields when the
-// store puts a validation on them that no option states, which pull can only report as a skip.
-test('every validation a declarable type supports is either an option or declined on purpose', () => {
+test('every validation is supported or explicitly omitted', () => {
   const carriers = new Map<string, string[]>();
   for (const [type, info] of Object.entries(METAFIELD_TYPES)) {
     const declares = declarability(type);
@@ -72,19 +64,19 @@ test('every validation a declarable type supports is either an option or decline
   for (const validation of Object.keys(DECLINED_VALIDATIONS)) {
     const published = Object.values(METAFIELD_TYPES)
       .some((info) => info.validations.map(baseType).includes(validation));
-    assert.ok(published, `${validation} is declined but Shopify no longer publishes it`);
+    assert.ok(published, `${validation} is omitted but absent from Shopify`);
     assert.equal(VALIDATION_OPTIONS[validation], undefined, `${validation} is both declined and an option`);
   }
 });
 
-test('the declined types are ones Shopify still publishes and no builder claims', () => {
+test('omitted types exist in Shopify and have no builders', () => {
   for (const type of Object.keys(DECLINED)) {
-    assert.ok(type in METAFIELD_TYPES, `${type} is declined but Shopify no longer publishes it`);
+    assert.ok(type in METAFIELD_TYPES, `${type} is omitted but absent from Shopify`);
     assert.equal(BUILDERS[type], undefined, `${type} is both declined and built by field.${BUILDERS[type]}()`);
   }
 });
 
-test('the builders that cannot be wrapped in field.list() are the ones Shopify has no list type for', () => {
+test('list builders exist only for Shopify list types', () => {
   const missing = Object.keys(BUILDERS)
     .filter((type) => !(`list.${type}` in METAFIELD_TYPES))
     .sort();
@@ -95,12 +87,12 @@ test('declared owners are a subset of the MetafieldOwnerType enum', () => {
   for (const [handle, ownerType] of Object.entries(OWNER_TYPES)) {
     assert.ok(
       (METAFIELD_OWNER_TYPES as readonly string[]).includes(ownerType),
-      `owner ${handle} maps to ${ownerType}, which the enum no longer has`,
+      `owner ${handle} maps to missing enum value ${ownerType}`,
     );
   }
 });
 
-test('the validations the builders emit are supported by the types that carry them', () => {
+test('builders emit only supported validations', () => {
   const compiled = compileSchema(defineSchema({
     metaobjects: {
       faq: metaobject({ name: 'FAQ', fields: { question: field.string({ max: 100 }) } }),

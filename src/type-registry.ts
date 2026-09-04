@@ -1,5 +1,3 @@
-// shopify.dev exposes Shopify's type registry without store credentials and rejects aged-out
-// API versions, so the same request supplies metadata and validates the version pin.
 
 export interface RegistryType {
   readonly name: string;
@@ -20,8 +18,7 @@ const TYPES_QUERY =
   '{ metafieldDefinitionTypes { name category supportsDefinitionMigrations supportedValidations { name type } } }';
 const OWNERS_QUERY = '{ __type(name: "MetafieldOwnerType") { enumValues { name } } }';
 
-// A version the proxy refuses is a finding about the caller's pin; anything else is the check
-// failing to run. Only the first is something a person can act on, so they are not one error.
+// Distinguish invalid API versions from registry request failures.
 export type RegistryFailure = 'unsupported-version' | 'unavailable';
 
 export class RegistryError extends Error {
@@ -47,7 +44,7 @@ async function query<T>(version: string, document: string): Promise<T> {
   }
   const body = await response.json().catch(() => undefined) as
     { data?: T; error?: string; errors?: unknown } | undefined;
-  // Read before the status: the refusal arrives as a 400 carrying {"error":"Invalid API version"}.
+  // Invalid-version responses use HTTP 400 with a structured error body.
   if (body?.error) throw new RegistryError('unsupported-version', body.error);
   if (!response.ok) throw new RegistryError('unavailable', `proxy answered HTTP ${response.status}`);
   if (!body?.data) {

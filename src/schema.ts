@@ -10,7 +10,7 @@ import {
 
 export { SCHEMA_MARKER } from './types.js';
 
-// Accept only merchant-owned custom-data handles while checking them against Shopify's enum.
+// Accept only merchant-owned handles supported by Shopify.
 export const OWNER_TYPES = {
   article: 'ARTICLE',
   blog: 'BLOG',
@@ -113,9 +113,7 @@ function normalizeCapabilities(value: unknown, path: string): Record<string, boo
   return result;
 }
 
-// Shopify's metaobject field definition input has no access or constraints, and takes only some of
-// the capabilities a metafield does. Left to compile, any of them would plan drift on every run
-// that no apply could ever clear.
+// Reject metafield-only options that Shopify cannot store on metaobject fields.
 const metaobjectCapabilities = new Set<string>(METAOBJECT_FIELD_CAPABILITIES);
 const METAFIELD_ONLY_OPTIONS = [
   'access',

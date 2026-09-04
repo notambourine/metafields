@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Published changes need a version bump because merging that bump triggers release.
-# Paths default to published unless explicitly exempted below.
+# Require version bumps for published changes because merged bumps trigger releases.
+# Treat paths as published unless exempted below.
 set -uo pipefail
 
 BASE=${1:-origin/main}
@@ -10,19 +10,17 @@ MERGE_BASE=$(git merge-base "$BASE" HEAD) || {
 	exit 1
 }
 
-# Paths that never reach the published tarball or the code that builds it.
+# Paths excluded from the package and its build.
 is_exempt() {
 	case "$1" in
 		.github/* | test/* | test-d/* | scripts/* | .gitignore | PLAN.md) return 0 ;;
-		# Lockfile churn is devDependencies only; a runtime dep would show in package.json,
-		# which is checked on its own contents below.
+		# Runtime dependencies also change package.json, which is checked separately.
 		package-lock.json) return 0 ;;
 		*) return 1 ;;
 	esac
 }
 
-# package.json is shipped, but a version bump and a devDependencies bump are not reasons
-# to demand another bump. Compare everything else.
+# Ignore package version and devDependency changes when deciding if another bump is required.
 package_json_ships_a_change() {
 	local a b
 	a=$(git show "$MERGE_BASE:package.json" | jq -S 'del(.version, .devDependencies)')
@@ -61,7 +59,7 @@ EOF
 	exit 1
 fi
 
-# A typo that lowers the version would publish nothing and silently skip the release.
+# Reject version decreases because they cannot publish.
 if [[ "$(printf '%s\n%s\n' "$OLD" "$NEW" | sort -V | tail -1)" != "$NEW" ]]; then
 	printf '\nFAIL: version went backwards, %s -> %s.\n' "$OLD" "$NEW" >&2
 	exit 1

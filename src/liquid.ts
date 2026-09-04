@@ -2,8 +2,7 @@ import { baseType } from './declarable.js';
 import { METAFIELD_TYPES } from './metafield-types.js';
 import type { CompiledSchema, Owner } from './schema.js';
 
-// The Liquid language server groups definitions by these handles and has none for
-// customer or draft_order, so metafields on those owners cannot be represented.
+// The Liquid language server has no groups for customer or draft_order metafields.
 const LIQUID_OWNERS = {
   article: 'article',
   blog: 'blog',
@@ -53,7 +52,7 @@ export function emitLiquidMetafields(schema: CompiledSchema): LiquidEmit {
   return { definitions, skipped };
 }
 
-// The language server ignores categories; UNKNOWN exposes types missing from Shopify's list.
+// UNKNOWN exposes types missing from Shopify's supported list.
 function categoryOf(type: string): string {
   const types: Record<string, { category: string } | undefined> = METAFIELD_TYPES;
   return (types[type] ?? types[baseType(type)])?.category ?? 'UNKNOWN';

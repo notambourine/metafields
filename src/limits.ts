@@ -1,7 +1,6 @@
 import type { CompiledSchema } from './schema.js';
 
-// The Admin API answers TOO_LONG past this. Consumers were hand-maintaining the number;
-// owning it here lets a whole schema fail before the first create leaves a store half-applied.
+// Validate the API limit before writes to avoid partial application.
 export const DESCRIPTION_MAX_LENGTH = 255;
 
 export function descriptionViolations(schema: CompiledSchema): string[] {

@@ -221,8 +221,7 @@ export async function runMigration(
   return result;
 }
 
-// Nonzero while rows are still pending, in every mode, the same way schema drift is: the code
-// describes the store, so appending --dry-run to the command CI runs gates on the same answer.
+// Return nonzero while rows remain pending, including in dry-run mode.
 export function migrationExitCode(result: MigrationResult): number {
   return result.invalid > 0 || result.conflicts > 0 || result.pending > 0 ? 1 : 0;
 }

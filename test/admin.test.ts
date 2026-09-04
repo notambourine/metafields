@@ -7,11 +7,11 @@ function response(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data), { status, headers: { 'content-type': 'application/json' } });
 }
 
-test('Admin client validates stores before constructing a URL', () => {
+test('Admin client validates stores before building URLs', () => {
   assert.throws(() => new AdminClient({ store: 'evil.example.com', token: 'secret' }), /myshopify/);
 });
 
-test('read requests retry transient HTTP responses without exposing tokens', async () => {
+test('reads retry transient HTTP errors and redact tokens', async () => {
   let attempts = 0;
   const client = new AdminClient({
     store: 'example.myshopify.com', token: 'shpat_supersecret', retries: 1,
@@ -25,9 +25,7 @@ test('read requests retry transient HTTP responses without exposing tokens', asy
   assert.equal(attempts, 2);
 });
 
-// The escape this closes: every other test here stubs readSchema, so nothing ever sent the
-// metafield query, and 0.0.1 through 0.0.4 shipped one no Shopify API version accepts.
-test('metafield reads select by identifier, the only selector that is not deprecated', async () => {
+test('metafield reads select by identifier', async () => {
   let sent = { query: '', variables: {} as Record<string, unknown> };
   const client = new AdminClient({
     store: 'example.myshopify.com',
@@ -48,8 +46,7 @@ function throttled(): Response {
   return response({ errors: [{ message: 'Throttled', extensions: { code: 'THROTTLED' } }] });
 }
 
-// The escape this closes: a rate limit is an HTTP 200, so it never reaches the status checks.
-test('a throttle carrying HTTP 200 is retried, and an over-cost query is not', async () => {
+test('HTTP 200 throttles retry; over-cost queries do not', async () => {
   const attempts: string[] = [];
   const client = new AdminClient({
     store: 'example.myshopify.com', token: 'shpat_x', retries: 1,
@@ -73,9 +70,7 @@ test('a throttle carrying HTTP 200 is retried, and an over-cost query is not', a
   assert.equal(attempts.length, 3);
 });
 
-// A throttle rejects the mutation before it runs, so a retry cannot leave a second definition.
-// A 500 might already have created one, so it is still sent exactly once.
-test('a throttled mutation is retried; a mutation that may have landed is not', async () => {
+test('mutations retry throttles but not ambiguous failures', async () => {
   let attempts = 0;
   const client = new AdminClient({
     store: 'example.myshopify.com', token: 'shpat_x', retries: 2,
@@ -99,10 +94,7 @@ test('a throttled mutation is retried; a mutation that may have landed is not', 
   assert.equal(serverErrors, 1);
 });
 
-// The escape this closes: --dry-run never sends a payload and the registry lists both validation
-// names, so nothing caught that Shopify resolves a metaobject reference by id alone. 0.1.0 sent
-// the type and every metaobject reference in the fleet was refused.
-test('metaobject references travel as types and reach Shopify as definition ids', async () => {
+test('metaobject reference types resolve to Shopify definition IDs', async () => {
   const desired = compileSchema(defineSchema({
     metaobjects: {
       faq: metaobject({ name: 'FAQ', fields: { title: field.string() } }),
@@ -199,7 +191,6 @@ test('metaobject references travel as types and reach Shopify as definition ids'
   assert.deepEqual(sent.any_ref, [
     { name: 'metaobject_definition_ids', value: JSON.stringify([ids.faq, ids.story]) },
   ]);
-  // Verification re-reads what Shopify stored, so the ids also have to compare clean as types.
   assert.equal(result.plan.conflicts, 0);
   assert.deepEqual(result.created, [
     'metaobject:faq', 'metaobject:story',
@@ -207,9 +198,7 @@ test('metaobject references travel as types and reach Shopify as definition ids'
   ]);
 });
 
-// The escape this closes: updates ran before creates, so adding a reference field to an existing
-// metaobject aborted the run part-applied whenever the referenced metaobject was born the same run.
-test('an update can add a reference to a metaobject created in the same run', async () => {
+test('updates can reference metaobjects created in the same run', async () => {
   const desired = compileSchema(defineSchema({
     metaobjects: {
       faq: metaobject({ name: 'FAQ', fields: { title: field.string() } }),
@@ -294,9 +283,7 @@ test('an update can add a reference to a metaobject created in the same run', as
   assert.deepEqual(result.updated, ['metaobject:article']);
 });
 
-// The escape this closes: the planner compared field capabilities that no write carried, so drift
-// on one planned every run and apply cleared none of it, failing post-apply verification instead.
-test('a metaobject field capability is read, created, and updated', async () => {
+test('metaobject field capabilities support read, create, and update', async () => {
   const desired = compileSchema(defineSchema({
     metaobjects: {
       faq: metaobject({ name: 'FAQ', fields: { question: field.string({ adminFilterable: true }) } }),
@@ -338,7 +325,6 @@ test('a metaobject field capability is read, created, and updated', async () => 
           data: { metaobjectDefinitionUpdate: { metaobjectDefinition: { id: articleId }, userErrors: [] } },
         });
       }
-      // faq is absent so it is created; article exists with the capability off, which is the drift.
       const type = String((body.variables as { type?: string }).type);
       const titled = (key: string, name: string, enabled: boolean) => ({
         key, name, description: null, type: { name: 'single_line_text_field' },
@@ -369,7 +355,6 @@ test('a metaobject field capability is read, created, and updated', async () => 
     key: 'question', type: 'single_line_text_field', name: 'Question',
     capabilities: { adminFilterable: { enabled: true } },
   }]);
-  // Only the capability: an update never restates an attribute the plan did not report drifted.
   assert.deepEqual(sentUpdate.definition?.fieldDefinitions, [{
     update: { key: 'title', capabilities: { adminFilterable: { enabled: true } } },
   }]);

@@ -37,7 +37,6 @@ const PRESENT = {
 
 interface StoreState { metafields: unknown[]; refuse?: string }
 
-// One fake per store, so a create landing on one store is observable from the others.
 function fleet(states: Record<string, StoreState>): { connect: Connect; created: string[] } {
   const created: string[] = [];
   const connect = (async (store: string) => {
@@ -61,9 +60,7 @@ function targets(...stores: [string, boolean][]): StoreTarget[] {
   return stores.map(([store, explicit]) => ({ store, explicit }));
 }
 
-// The cross-store block is gone: every store applies the same set and skips the same
-// definitions, so the fleet stays uniform without withholding the creates one store can take.
-test('a conflict nothing can resolve on one store still lets the rest of the fleet create', async () => {
+test('blocked drift on one store does not block other stores', async () => {
   const { connect, created } = fleet({
     'a.myshopify.com': { metafields: [] },
     'b.myshopify.com': { metafields: [{ ...PRESENT, type: 'url' }] },
@@ -78,7 +75,7 @@ test('a conflict nothing can resolve on one store still lets the rest of the fle
   assert.equal(fleetExitCode(result), 1);
 });
 
-test('a swept store that has not installed the app is reported, not failed', async () => {
+test('sweeps report unenrolled stores without failing', async () => {
   const { connect, created } = fleet({ 'a.myshopify.com': { metafields: [] } });
   const result = await synchronizeFleet(
     targets(['a.myshopify.com', true], ['b.myshopify.com', false]), schema(), 'apply', connect,
@@ -91,7 +88,7 @@ test('a swept store that has not installed the app is reported, not failed', asy
   assert.equal(fleetExitCode(result), 0);
 });
 
-test('a store named on the command line never fails quietly', async () => {
+test('explicit stores fail when the app is not installed', async () => {
   const { connect } = fleet({ 'a.myshopify.com': { metafields: [] } });
   await assert.rejects(
     synchronizeFleet(targets(['a.myshopify.com', true], ['b.myshopify.com', true]), schema(), 'apply', connect),
@@ -99,7 +96,7 @@ test('a store named on the command line never fails quietly', async () => {
   );
 });
 
-test('a swept store that cannot be reached exits 2 even when every reached store is clean', async () => {
+test('unreachable swept stores exit 2', async () => {
   const connect = (async (store: string) => {
     if (store === 'b.myshopify.com') throw new GrantError(store, 'shop_not_permitted', 'shop is in another organization');
     return { store, async readSchema() { return { metaobjects: [], metafields: [PRESENT] }; } };
@@ -112,7 +109,7 @@ test('a swept store that cannot be reached exits 2 even when every reached store
   assert.equal(fleetExitCode(result), 2);
 });
 
-test('one store refusing a write does not stop the next, and every refusal is collected', async () => {
+test('fleet writes continue after refusals and collect each error', async () => {
   const { connect, created } = fleet({
     'a.myshopify.com': { metafields: [], refuse: 'PRODUCT:custom.promo_text: taken' },
     'b.myshopify.com': { metafields: [] },
@@ -127,7 +124,7 @@ test('one store refusing a write does not stop the next, and every refusal is co
   assert.equal(fleetExitCode(result), 2);
 });
 
-test('every over-long description is listed at once, before the first socket', async () => {
+test('description validation reports all errors before requests', async () => {
   const long = 'x'.repeat(256);
   const over = compileSchema(defineSchema({
     metaobjects: { faq: metaobject({ name: 'FAQ', fields: { question: field.string({ description: long }) } }) },
@@ -140,7 +137,7 @@ test('every over-long description is listed at once, before the first socket', a
   await assert.rejects(synchronize(unreachable as never, over, 'apply'), /256 characters/);
 });
 
-test('minting posts client credentials and keeps the two meaningful grant errors apart', async () => {
+test('token minting distinguishes app installation and organization errors', async () => {
   let sent = { url: '', body: '' };
   const token = await mintAccessToken({
     store: 'a.myshopify.com', clientId: 'id', clientSecret: 'secret',
@@ -163,9 +160,7 @@ test('minting posts client credentials and keeps the two meaningful grant errors
   }
 });
 
-// A fleet sweep is read to find the exceptions, so a store whose definitions all match has to
-// cost one line however many it carries, and every line it does print has to say what it acted on.
-test('the fleet report collapses matching definitions and names the shape of each one it prints', async () => {
+test('fleet reports summarize matches and identify changed shapes', async () => {
   const desired = compileSchema(defineSchema({
     metaobjects: { faq: metaobject({ name: 'FAQ', fields: { question: field.string({ name: 'Question' }) } }) },
     metafields: { product: { custom: {
@@ -197,7 +192,7 @@ test('the fleet report collapses matching definitions and names the shape of eac
   ].join('\n'));
 });
 
-test('a definition force alone cannot fix keeps its reasons and its advice', async () => {
+test('blocked definitions retain reasons and --force guidance', async () => {
   const connect = (async (store: string) => ({
     store,
     async readSchema() { return { metaobjects: [], metafields: [{ ...PRESENT, type: 'url' }] }; },
@@ -207,14 +202,12 @@ test('a definition force alone cannot fix keeps its reasons and its advice', asy
     'STORE a.myshopify.com',
     'BLOCKED metafield:PRODUCT:custom.promo_text single_line_text_field',
     '  metafield:PRODUCT:custom.promo_text.type: expected single_line_text_field, found url',
-    '  Shopify will not retype a definition that holds values. --force cannot do this; use a migration.',
+    '  Retyping definitions with stored values is unsupported. Use a migration.',
     '',
   ].join('\n'));
 });
 
-// The JSON payload is read to find out what a run decided. Repeating the caller's own schema
-// back at them once per store buried that under three thousand lines in a CI log.
-test('the JSON report keeps every decision and drops the schema the caller passed in', async () => {
+test('JSON reports include decisions and omit input schemas', async () => {
   const connect = (async (store: string) => ({
     store,
     async readSchema() { return { metaobjects: [], metafields: [{ ...PRESENT, type: 'url' }] }; },
@@ -230,8 +223,6 @@ test('the JSON report keeps every decision and drops the schema the caller passe
     reasons: ['metafield:PRODUCT:custom.promo_text.type: expected single_line_text_field, found url'],
     notices: [],
   }]);
-  // Both lists assert their whole shape: a field added to a plan or drift item reaches every
-  // operator parsing --json, so growing one has to be a decision someone makes here.
   assert.deepEqual(report.stores[0]?.drift?.items, [{
     identity: 'metafield:PRODUCT:custom.promo_text',
     applies: [],
@@ -248,17 +239,15 @@ async function cli(args: string[], env: Record<string, string>) {
   });
 }
 
-test('CLI accepts a repeated --store and refuses to serve a fleet from a single-store token', async () => {
+test('CLI accepts repeated --store and rejects token-only fleets', async () => {
   await assert.rejects(
     cli(['./test/fixture-schema.ts', '--store', 'a.myshopify.com', '--store', 'b.myshopify.com'],
       { SHOPIFY_ADMIN_ACCESS_TOKEN: 'shpat_x' }),
-    /a fleet needs SHOPIFY_APP_CLIENT_ID/,
+    /fleets require SHOPIFY_APP_CLIENT_ID/,
   );
 });
 
-// The failure has to be the store host, not auth: reaching AdminClient at all proves the
-// half-set app credentials fell back to the token rather than refusing the run.
-test('a half-set app client id falls back to the single-store token', async () => {
+test('incomplete app credentials fall back to a static token', async () => {
   const reject = (args: string[], env: Record<string, string>) =>
     cli(args, env).then(() => '', (error: { stderr?: string }) => error.stderr ?? '');
   assert.match(
@@ -272,7 +261,7 @@ test('a half-set app client id falls back to the single-store token', async () =
   );
 });
 
-test('CLI --validate exits 2 listing every over-long description', async () => {
+test('CLI --validate reports all description errors and exits 2', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'metafields-limits-'));
   const path = join(directory, 'schema.ts');
   await writeFile(path, `import { defineSchema, field } from '${join(process.cwd(), 'dist/index.js')}';
@@ -292,7 +281,7 @@ export default defineSchema({
   assert.equal(parsed.violations.length, 2);
 });
 
-test('a minted token never reaches an error message', () => {
+test('errors redact minted tokens', () => {
   const leaked = new GrantError('a.myshopify.com', 'unreachable', 'connect failed for shpca_minted_abc');
   assert.equal(leaked.message, 'connect failed for [REDACTED]');
 });

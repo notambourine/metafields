@@ -1,8 +1,7 @@
 import type { Validation } from './types.js';
 
-// Shopify resolves a metaobject reference only by definition id; the documented type form covers
-// app-reserved types alone, and a merchant type there reads as no validation at all. A schema that
-// travels between stores can only name types, so the two forms are translated at the API boundary.
+// Shopify stores merchant metaobject references by definition ID; schemas use portable types.
+// Translate between them at the API boundary.
 const STORE_NAMES: Record<string, string> = {
   metaobject_definition_type: 'metaobject_definition_id',
   metaobject_definition_types: 'metaobject_definition_ids',
@@ -41,8 +40,6 @@ function toStoreValidations(
   });
 }
 
-// Whole definitions are translated once at the client boundary, so the GraphQL input builders
-// stay a plain projection of the canonical shape.
 export function toStoreField<T extends { validations: readonly Validation[] }>(
   definition: T,
   idByType: ReadonlyMap<string, string>,

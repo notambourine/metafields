@@ -81,8 +81,7 @@ export function mapMetaobject(value: RawMetaobject): ExistingMetaobject {
   };
 }
 
-// Read and pull select the same definitions, so the selections live with the shapes they decode:
-// a capability Shopify adds is then one edit, not two that can silently disagree.
+// Share selections between reads and pulls to keep decoded shapes consistent.
 export const FIELD_SELECTION = `
   key name description type { name } required validations { name value }
   capabilities { ${METAOBJECT_FIELD_CAPABILITIES.map((name) => `${name} { enabled }`).join(' ')} }

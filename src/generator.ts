@@ -9,8 +9,6 @@ export interface PulledSchema {
   excluded: string[];
 }
 
-// A definition this release cannot declare, and why. pull writes the rest rather than refusing the
-// store: a schema missing a field is something an operator can act on, an empty file is not.
 export interface SkippedDefinition {
   identity: string;
   reason: string;
@@ -31,8 +29,7 @@ function property(key: string): string {
   return /^[A-Za-z_$][\w$]*$/.test(key) ? key : quote(key);
 }
 
-// Shopify sends every validation as a string. Bounds carry a number, a date, or a measurement's
-// value and unit; the rest already arrive as the JSON their option accepts.
+// Parse scalar and measurement bounds; other validations already contain option-compatible JSON.
 function renderValidation(name: string, value: string): string {
   if (name === 'regex') return quote(value);
   if (name !== 'min' && name !== 'max') return value;
@@ -78,8 +75,7 @@ function options(
   return result.length > 0 ? `{ ${result.join(', ')} }` : '';
 }
 
-// The pulled definition says nothing about the shape behind a json value, so the generic stays
-// unknown for the operator to narrow.
+// Pulled JSON definitions do not describe their value shape.
 const TYPE_ARGUMENTS: Record<string, string> = { json: '<unknown>' };
 
 type Expression = { code: string; reason?: undefined } | { code?: undefined; reason: string };
@@ -108,24 +104,23 @@ function fieldExpression(
   const list = rawType.startsWith('list.');
   const type = baseType(rawType);
   const call = builderFor(type);
-  if (!call) return { reason: `this release cannot declare ${rawType}` };
+  if (!call) return { reason: `unsupported type: ${rawType}` };
 
   const all = field.validations ?? [];
   const args = [...call.args];
   if (type === 'metaobject_reference' || type === 'mixed_reference') {
     const targets = referenceTargets(type, all);
     if (!targets || targets.length === 0) {
-      // A reference Shopify stores as a definition id stays an id until a pulled metaobject names
-      // it, and an id belongs to one store, so the guidance travels with the definition it affects.
+      // Skip store-specific reference IDs until a pulled metaobject supplies a portable type.
       return {
         reason: all.some((entry) => entry.name.startsWith('metaobject_definition_id'))
-          ? `${rawType} names a definition id this store owns; rerun pull with --metaobjects to resolve it`
-          : `${rawType} names no metaobject type`,
+          ? `${rawType} uses a store-specific definition ID; pass --metaobjects to resolve it`
+          : `${rawType} has no metaobject type`,
       };
     }
     const missing = targets.filter((target) => !declared.has(target));
     if (missing.length > 0) {
-      return { reason: `references ${missing.join(', ')}, which this pull did not write` };
+      return { reason: `missing referenced metaobject: ${missing.join(', ')}` };
     }
     args.push(type === 'mixed_reference' ? JSON.stringify(targets) : quote(targets[0] as string));
   }
@@ -133,7 +128,7 @@ function fieldExpression(
   const itemValidations = all.filter((entry) => !entry.name.startsWith('list.') && !REFERENCE_VALIDATIONS.has(entry.name));
   const undeclarable = itemValidations.find((entry) => !(entry.name in VALIDATION_OPTIONS));
   if (undeclarable) {
-    return { reason: `no option declares the ${undeclarable.name} validation on ${rawType}` };
+    return { reason: `unsupported ${undeclarable.name} validation on ${rawType}` };
   }
 
   const builder = `field.${call.name}${TYPE_ARGUMENTS[type] ?? ''}`;
@@ -160,9 +155,7 @@ interface Declarable {
   skipped: SkippedDefinition[];
 }
 
-// A metaobject with nothing left to declare is dropped, which can strand a reference to it, which
-// can empty another metaobject. Passing until the set stops shrinking keeps the written schema one
-// that compiles.
+// Remove empty metaobjects and their stranded references until the schema stabilizes.
 function declarable(pulled: PulledSchema): Declarable {
   const declared = new Set(pulled.metaobjects.map((definition) => definition.type));
   const dropped = new Map<string, string>();
@@ -187,7 +180,7 @@ function declarable(pulled: PulledSchema): Declarable {
         continue;
       }
       emptied.push(definition.type);
-      dropped.set(definition.type, `no field this release can declare, starting with ${reasons[0]?.reason ?? 'no field at all'}`);
+      dropped.set(definition.type, `no supported fields: ${reasons[0]?.reason ?? 'empty definition'}`);
     }
     if (emptied.length === 0) break;
     for (const type of emptied) declared.delete(type);
@@ -208,9 +201,7 @@ export function generateSchemaModule(pulled: PulledSchema): GeneratedSchema {
   const { metaobjects, metafields, skipped } = declarable(pulled);
   const lines: string[] = [];
   if (skipped.length > 0) {
-    lines.push(`// Pulled without ${skipped.length} definition(s) this release cannot declare:`);
-    for (const entry of skipped) lines.push(`//   ${entry.identity}: ${entry.reason}`);
-    lines.push('');
+    lines.push(`// Omitted ${skipped.length} unsupported definition(s). See pull diagnostics.`, '');
   }
   lines.push(
     "import { defineSchema, field, metaobject } from '@notambourine/metafields';",
@@ -221,7 +212,7 @@ export function generateSchemaModule(pulled: PulledSchema): GeneratedSchema {
   for (const { definition, fields } of [...metaobjects].sort((a, b) => a.definition.type.localeCompare(b.definition.type))) {
     const metaOptions = [`name: ${quote(definition.name)}`];
     if (definition.description) metaOptions.push(`description: ${quote(definition.description)}`);
-    // A display key naming a field this file could not declare would not compile.
+    // Drop display keys that reference omitted fields.
     if (definition.displayNameKey && fields.some((field) => field.key === definition.displayNameKey)) {
       metaOptions.push(`displayNameKey: ${quote(definition.displayNameKey)}`);
     }

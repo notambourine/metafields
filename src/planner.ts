@@ -52,8 +52,6 @@ export interface PlanItem {
   reasons: string[];
   notices: string[];
   desired: CanonicalMetaobject | CanonicalMetafield;
-  // What the store has today. An update needs the metaobject id to write against and the
-  // stored constraint values to diff, neither of which a reason string can carry.
   existing?: ExistingMetaobject | ExistingMetafield;
 }
 
@@ -122,8 +120,7 @@ function compareField(
   desired: CanonicalField,
   existing: ExistingField,
   path: string,
-  // Only metaobject fields carry `required`; on a metafield the flag is a type-level
-  // assertion the Admin API neither stores nor returns, so comparing it invents a conflict.
+  // The Admin API stores `required` only for metaobject fields.
   comparesRequired = true,
 ): string[] {
   const reasons: string[] = [];
@@ -245,8 +242,7 @@ export function planFrom(items: PlanItem[]): Plan {
   };
 }
 
-// Exit describes remaining store drift in every mode, so --dry-run preserves CI semantics.
-// Cosmetic notices are not drift.
+// Exit on operational drift in every mode; cosmetic notices do not count.
 export function exitCodeForPlan(plan: Plan): number {
   if (plan.indeterminate > 0) return 2;
   if (plan.conflicts > 0 || plan.creates > 0) return 1;

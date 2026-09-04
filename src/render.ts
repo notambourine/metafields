@@ -15,8 +15,6 @@ export interface FleetReport extends Omit<FleetResult, 'stores'> {
   stores: ReportedStore[];
 }
 
-// What a run decided, without the schema the caller passed in: `desired` is that schema echoed
-// back once per store, and `existing` is store state the reasons already name.
 export function fleetReport(result: FleetResult): FleetReport {
   return { ...result, stores: result.stores.map(reportedStore) };
 }
@@ -40,8 +38,6 @@ function reportedDrift(entry: DriftItem): ReportedDrift {
   return { identity: item.identity, ...rest };
 }
 
-// One line per definition that needs attention, and a count for the rest: a fleet report is read
-// to find the exceptions, and a definition that already matches has nothing to say.
 export function renderFleet(result: FleetResult): string {
   const lines: string[] = [];
   for (const outcome of result.stores) {
@@ -65,8 +61,7 @@ function renderStore(outcome: StoreOutcome): string[] {
   let matched = 0;
   for (const item of outcome.plan?.items ?? []) {
     const entry = drift.get(item.identity);
-    // --apply re-reads the store, so a definition it just wrote reads PRESENT here. The write
-    // it performed is what the operator needs, not the state it left behind.
+    // After apply re-reads, retain the action performed instead of reporting PRESENT.
     if (created.has(item.identity)) lines.push(headline('CREATED', item));
     else if (updated.has(item.identity)) lines.push(headline('UPDATED', item));
     else if (entry === undefined) {
@@ -82,8 +77,6 @@ function renderStore(outcome: StoreOutcome): string[] {
   return lines;
 }
 
-// The refusal carries the teaching, so the generic flag name costs nothing. BLOCKED matters
-// most: saying "--force cannot do this" is what stops someone reaching for it here.
 function renderDeferred(entry: DriftItem): string[] {
   if (entry.blocked.length === 0) {
     return [
@@ -96,8 +89,6 @@ function renderDeferred(entry: DriftItem): string[] {
   return [headline('BLOCKED', entry.item), ...indented(entry.blocked), ...indented(advice)];
 }
 
-// The identity says where a definition lives; the shape says what it is, which is what an
-// operator checks before letting a write land on a store they cannot preview.
 function headline(label: string, item: PlanItem): string {
   return `${label} ${item.identity} ${shape(item.desired)}`;
 }

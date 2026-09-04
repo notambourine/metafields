@@ -1,6 +1,3 @@
-// What the DSL can say about a Shopify type, in one table. The builders emit validations through
-// it, pull chooses what it can write from it, and a test compares it against the generated
-// registry, so a type Shopify adds surfaces as a failing check rather than a customer-side abort.
 
 import { METAFIELD_TYPES } from './metafield-types.js';
 
@@ -35,17 +32,14 @@ export const BUILDERS: Record<string, string> = {
   variant_reference: 'variant',
 };
 
-// Types this release will not declare, and why. Each names something Shopify owns on the store
-// itself, so a schema that travels between stores cannot carry it.
+// Store-owned types cannot be represented in a portable schema.
 export const DECLINED: Record<string, string> = {
   disclosure_reference: 'points at Shopify-owned metaobject definitions no schema can create',
   product_taxonomy_disclosure_reference: 'points at Shopify-owned disclosure definitions',
   product_taxonomy_value_reference: "names a handle from Shopify's product taxonomy",
 };
 
-// Shopify validation name to the builder option that declares it. A validation absent here is one
-// no schema can state, which is why pull reports the field instead of writing a definition that
-// says less than the store does.
+// Map Shopify validation names to builder options. Pull skips unrepresentable validations.
 export const VALIDATION_OPTIONS: Record<string, string> = {
   min: 'min',
   max: 'max',
@@ -59,8 +53,6 @@ export const VALIDATION_OPTIONS: Record<string, string> = {
   allowed_domains: 'allowedDomains',
 };
 
-// Validations a builder argument carries instead of an option, because they name the definition a
-// reference points at rather than bound its value.
 export const REFERENCE_VALIDATIONS = new Set([
   'metaobject_definition_id',
   'metaobject_definition_ids',
@@ -68,8 +60,6 @@ export const REFERENCE_VALIDATIONS = new Set([
   'metaobject_definition_types',
 ]);
 
-// Validations this release will not state, and why, for types it otherwise declares. Empty is the
-// healthy state: the coverage test routes a validation Shopify adds through here or an option.
 export const DECLINED_VALIDATIONS: Record<string, string> = {};
 
 export interface BuilderCall {
@@ -91,8 +81,6 @@ export function builderFor(type: string): BuilderCall | undefined {
     : undefined;
 }
 
-// Every type the table accounts for, paired with how. The coverage test walks the registry against
-// this, so a new type is either declarable or a deliberate omission with a reason.
 export function declarability(type: string): { builder: BuilderCall } | { declined: string } | undefined {
   const base = baseType(type);
   const builder = builderFor(base);

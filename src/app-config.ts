@@ -4,8 +4,7 @@ export interface AppConfig {
   clientId: string;
 }
 
-// Only the top-level table is read, and only for `client_id`: a `client_id` under a `[section]`
-// belongs to that section, and a TOML parser is a dependency for one string.
+// Ignore section-scoped client IDs. A TOML dependency is unnecessary for one top-level string.
 export async function readAppConfig(path: string): Promise<AppConfig> {
   let text: string;
   try {

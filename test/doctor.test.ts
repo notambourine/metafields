@@ -11,8 +11,6 @@ import {
 } from '../dist/index.js';
 import type { Registry, RegistryType } from '../dist/index.js';
 
-// The shipped table rendered back into the shape the proxy answers with, so a registry built
-// from it compares equal. Every case below starts here and changes one thing.
 function shippedRegistry(): Registry {
   const types: RegistryType[] = Object.entries(METAFIELD_TYPES).map(([name, info]) => ({
     name,
@@ -27,14 +25,14 @@ function withTypes(types: RegistryType[]): Registry {
   return { ...shippedRegistry(), types };
 }
 
-test('a registry matching the shipped table reports no differences', () => {
+test('matching registries report no differences', () => {
   const check = compareRegistry(shippedRegistry());
   assert.equal(check.matches, true);
   assert.deepEqual(check.types, []);
   assert.deepEqual(check.owners, []);
 });
 
-test('a type Shopify added is reported as added', () => {
+test('new Shopify types are reported as added', () => {
   const registry = shippedRegistry();
   const check = compareRegistry(withTypes([...registry.types, {
     name: 'quantum_field',
@@ -46,13 +44,13 @@ test('a type Shopify added is reported as added', () => {
   assert.equal(check.matches, false);
 });
 
-test('a type Shopify dropped is reported as removed', () => {
+test('removed Shopify types are reported as removed', () => {
   const registry = shippedRegistry();
   const check = compareRegistry(withTypes(registry.types.filter((type) => type.name !== 'boolean')));
   assert.deepEqual(check.types, [{ kind: 'removed', name: 'boolean' }]);
 });
 
-test('a new validation on an existing type is reported with what changed', () => {
+test('new validations report their type and name', () => {
   const registry = shippedRegistry();
   const check = compareRegistry(withTypes(registry.types.map((type) => (
     type.name === 'url'
@@ -66,7 +64,7 @@ test('a new validation on an existing type is reported with what changed', () =>
   }]);
 });
 
-test('category and migratable changes are reported together', () => {
+test('category and migratable changes report together', () => {
   const registry = shippedRegistry();
   const check = compareRegistry(withTypes(registry.types.map((type) => (
     type.name === 'boolean'
@@ -81,7 +79,7 @@ test('category and migratable changes are reported together', () => {
   }]);
 });
 
-test('an owner type the enum gained is reported without touching the type list', () => {
+test('new owner types do not change the type list', () => {
   const registry = shippedRegistry();
   const check = compareRegistry({ ...registry, owners: [...registry.owners, 'WAREHOUSE'] });
   assert.deepEqual(check.types, []);
@@ -89,8 +87,7 @@ test('an owner type the enum gained is reported without touching the type list',
   assert.equal(check.matches, false);
 });
 
-// Validation order is a rendering detail of whichever side you read; only membership matters.
-test('validations reordered are not a difference', () => {
+test('validation order does not create drift', () => {
   const registry = shippedRegistry();
   const check = compareRegistry(withTypes(registry.types.map((type) => (
     { ...type, supportedValidations: [...type.supportedValidations].reverse() }
@@ -98,16 +95,14 @@ test('validations reordered are not a difference', () => {
   assert.equal(check.matches, true);
 });
 
-// runDoctor takes its fetcher so both branches stay offline. Nothing in the suite may depend
-// on shopify.dev being up.
-test('doctor passes both checks when the registry matches', async () => {
+test('doctor passes when the registry matches', async () => {
   const report = await runDoctor(DEFAULT_API_VERSION, async () => shippedRegistry());
   assert.equal(report.healthy, true);
   assert.deepEqual(report.checks.map((check) => check.name), ['api-version', 'metafield-types']);
   assert.equal(doctorExitCode(report), 0);
 });
 
-test('doctor reports a stale table as a failed check, not an error', async () => {
+test('doctor reports stale tables as findings', async () => {
   const report = await runDoctor(DEFAULT_API_VERSION, async () => {
     const registry = shippedRegistry();
     return { ...registry, owners: [...registry.owners, 'WAREHOUSE'] };
@@ -119,7 +114,7 @@ test('doctor reports a stale table as a failed check, not an error', async () =>
   assert.equal(doctorExitCode(report), 1);
 });
 
-test('a version Shopify refuses is a failed check, and the type table is not guessed at', async () => {
+test('doctor reports rejected API versions without guessing types', async () => {
   const report = await runDoctor('2019-01', () => {
     throw new RegistryError('unsupported-version', 'Invalid API version');
   });
@@ -128,8 +123,7 @@ test('a version Shopify refuses is a failed check, and the type table is not gue
   assert.equal(doctorExitCode(report), 1);
 });
 
-// An outage is not a finding: it must not read as a healthy store or a stale table.
-test('an unreachable proxy throws rather than reporting a failed check', async () => {
+test('doctor throws when the registry is unreachable', async () => {
   await assert.rejects(
     runDoctor(DEFAULT_API_VERSION, () => {
       throw new RegistryError('unavailable', 'cannot reach shopify.dev');
@@ -138,7 +132,7 @@ test('an unreachable proxy throws rather than reporting a failed check', async (
   );
 });
 
-test('an aged-out pin blames the release, and an explicit --api-version blames the flag', async () => {
+test('doctor attributes rejected default and explicit API versions', async () => {
   const fail = () => { throw new RegistryError('unsupported-version', 'Invalid API version'); };
   const pinned = await runDoctor(DEFAULT_API_VERSION, fail);
   const chosen = await runDoctor('2019-01', fail);

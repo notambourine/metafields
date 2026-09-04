@@ -7,8 +7,6 @@ import type { CompiledSchema } from './schema.js';
 
 export interface StoreTarget {
   store: string;
-  // A store the operator named fails loudly. Only a store reached by a sweep is
-  // downgraded to a report, so a typo never passes as an absent store.
   explicit: boolean;
 }
 
@@ -33,8 +31,6 @@ export interface FleetResult {
 export type Connect = (store: string) => Promise<AdminClient>;
 
 export interface FleetOptions {
-  // Overrides the tool's own judgment about which updates can break something live. It never
-  // overrides a Shopify constraint and never overrides a data problem.
   force?: boolean;
 }
 
@@ -70,7 +66,6 @@ export async function synchronizeFleet(
   }
   if (reached.length === 0) throw new AdminError('no store could be planned');
   if (mode !== 'apply') return { mode, stores };
-  // Identical per-store plans preserve uniformity without letting one refusal stop the fleet.
   for (const { client, outcome } of reached) {
     try {
       const result = await applyPlan(client, schema, outcome.plan, outcome.drift, force);
@@ -88,7 +83,6 @@ export async function synchronizeFleet(
 export function fleetExitCode(result: FleetResult): number {
   let code = 0;
   for (const outcome of result.stores) {
-    // A store that has simply not installed the app is not a failure; a fleet sweep stays green.
     if (outcome.status === 'unreachable' || outcome.refused !== undefined) code = Math.max(code, 2);
     else if (outcome.plan) code = Math.max(code, exitCodeForPlan(outcome.plan));
   }

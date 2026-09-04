@@ -1,6 +1,5 @@
 #!/usr/bin/env node
-// Run against dist so generation and doctor share one registry client; scripts cannot import
-// src under Node's type-stripping constraints.
+// Use the built registry client because Node cannot strip the source types used here.
 
 import { readFile, writeFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
@@ -11,7 +10,6 @@ const OUT = fileURLToPath(new URL('../src/metafield-types.ts', import.meta.url))
 
 type TypeRow = RegistryType;
 
-// Single quotes, to match the rest of src/.
 function quote(value: string): string {
   if (value.includes("'")) throw new Error(`unexpected quote in ${value}`);
   return `'${value}'`;
@@ -37,8 +35,7 @@ function render(version: string, types: readonly TypeRow[], owners: readonly str
     '',
     'export interface MetafieldTypeInfo {',
     '  readonly category: string;',
-    '  // Whether values that predate a definition can be adopted into one of this type. It is not',
-    '  // a statement about retyping a definition that already exists, which Shopify never allows.',
+    '  // Whether existing values can be adopted into a new definition of this type.',
     '  readonly migratable: boolean;',
     '  readonly validations: readonly string[];',
     '}',
