@@ -230,9 +230,14 @@ test('the JSON report keeps every decision and drops the schema the caller passe
     reasons: ['metafield:PRODUCT:custom.promo_text.type: expected single_line_text_field, found url'],
     notices: [],
   }]);
-  assert.deepEqual(report.stores[0]?.drift?.items.map((entry) => [entry.identity, entry.blocked.length]), [
-    ['metafield:PRODUCT:custom.promo_text', 1],
-  ]);
+  // Both lists assert their whole shape: a field added to a plan or drift item reaches every
+  // operator parsing --json, so growing one has to be a decision someone makes here.
+  assert.deepEqual(report.stores[0]?.drift?.items, [{
+    identity: 'metafield:PRODUCT:custom.promo_text',
+    applies: [],
+    needsForce: [],
+    blocked: ['metafield:PRODUCT:custom.promo_text.type: expected single_line_text_field, found url'],
+  }]);
 });
 
 const execFileAsync = promisify(execFile);
