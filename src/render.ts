@@ -1,7 +1,44 @@
-import { blockedAdvice, type DriftItem } from './changes.js';
+import { blockedAdvice, type DriftItem, type DriftPlan } from './changes.js';
 import type { FleetResult, StoreOutcome } from './fleet.js';
-import type { PlanItem } from './planner.js';
+import type { Plan, PlanItem } from './planner.js';
 import type { CanonicalMetafield, CanonicalMetaobject } from './schema.js';
+
+export type ReportedItem = Omit<PlanItem, 'desired' | 'existing'>;
+export type ReportedDrift = Omit<DriftItem, 'item'> & { identity: string };
+
+export interface ReportedStore extends Omit<StoreOutcome, 'plan' | 'drift'> {
+  plan?: Omit<Plan, 'items'> & { items: ReportedItem[] };
+  drift?: Omit<DriftPlan, 'items'> & { items: ReportedDrift[] };
+}
+
+export interface FleetReport extends Omit<FleetResult, 'stores'> {
+  stores: ReportedStore[];
+}
+
+// What a run decided, without the schema the caller passed in: `desired` is that schema echoed
+// back once per store, and `existing` is store state the reasons already name.
+export function fleetReport(result: FleetResult): FleetReport {
+  return { ...result, stores: result.stores.map(reportedStore) };
+}
+
+function reportedStore(outcome: StoreOutcome): ReportedStore {
+  const { plan, drift, ...rest } = outcome;
+  return {
+    ...rest,
+    ...(plan && { plan: { ...plan, items: plan.items.map(reportedItem) } }),
+    ...(drift && { drift: { ...drift, items: drift.items.map(reportedDrift) } }),
+  };
+}
+
+function reportedItem(item: PlanItem): ReportedItem {
+  const { desired, existing, ...rest } = item;
+  return rest;
+}
+
+function reportedDrift(entry: DriftItem): ReportedDrift {
+  const { item, ...rest } = entry;
+  return { identity: item.identity, ...rest };
+}
 
 // One line per definition that needs attention, and a count for the rest: a fleet report is read
 // to find the exceptions, and a definition that already matches has nothing to say.

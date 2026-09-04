@@ -18,7 +18,7 @@ import {
 import { emitLiquidMetafields, isLiquidMetafieldsFile } from './liquid.js';
 import type { SyncMode } from './planner.js';
 import { pullSchema } from './pull.js';
-import { renderFleet } from './render.js';
+import { fleetReport, renderFleet } from './render.js';
 import { compileSchema, OWNER_TYPES, SCHEMA_MARKER, stringifyCanonical, type Owner } from './schema.js';
 import { doctorExitCode, runDoctor, type DoctorReport } from './doctor.js';
 
@@ -98,7 +98,7 @@ async function syncCommand(args: Arguments): Promise<number> {
   const result = await synchronizeFleet(targets, schema, mode, await connectorFrom(args, targets.length), {
     force: args.flags.has('force'),
   });
-  output(args, result, renderFleet(result));
+  output(args, fleetReport(result), renderFleet(result));
   return fleetExitCode(result);
 }
 
