@@ -11,6 +11,7 @@ import {
   descriptionViolations,
   field,
   fleetExitCode,
+  fleetReport,
   GrantError,
   metaobject,
   mintAccessToken,
@@ -209,6 +210,34 @@ test('a definition force alone cannot fix keeps its reasons and its advice', asy
     '  Shopify will not retype a definition that holds values. --force cannot do this; use a migration.',
     '',
   ].join('\n'));
+});
+
+// The JSON payload is read to find out what a run decided. Repeating the caller's own schema
+// back at them once per store buried that under three thousand lines in a CI log.
+test('the JSON report keeps every decision and drops the schema the caller passed in', async () => {
+  const connect = (async (store: string) => ({
+    store,
+    async readSchema() { return { metaobjects: [], metafields: [{ ...PRESENT, type: 'url' }] }; },
+  })) as unknown as Connect;
+  const result = await synchronizeFleet(targets(['a.myshopify.com', true]), schema(), 'dry-run', connect);
+  const report = fleetReport(result);
+  const serialized = JSON.stringify(report);
+  assert.ok(!serialized.includes('"desired"') && !serialized.includes('"existing"'));
+  assert.deepEqual(report.stores[0]?.plan?.items, [{
+    kind: 'metafield',
+    identity: 'metafield:PRODUCT:custom.promo_text',
+    status: 'CONFLICT',
+    reasons: ['metafield:PRODUCT:custom.promo_text.type: expected single_line_text_field, found url'],
+    notices: [],
+  }]);
+  // Both lists assert their whole shape: a field added to a plan or drift item reaches every
+  // operator parsing --json, so growing one has to be a decision someone makes here.
+  assert.deepEqual(report.stores[0]?.drift?.items, [{
+    identity: 'metafield:PRODUCT:custom.promo_text',
+    applies: [],
+    needsForce: [],
+    blocked: ['metafield:PRODUCT:custom.promo_text.type: expected single_line_text_field, found url'],
+  }]);
 });
 
 const execFileAsync = promisify(execFile);
