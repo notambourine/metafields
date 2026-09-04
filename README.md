@@ -55,7 +55,7 @@ Each definition is atomic: if one attribute is blocked, its other changes wait. 
 | Change | Required mode |
 | --- | --- |
 | Create a definition or add a field | `--apply` |
-| Change labels, `displayNameKey`, or enable a capability | `--apply` |
+| Change a definition or field label, `displayNameKey`, or enable a capability | `--apply` |
 | Change access, validation, constraints, `required`, or disable a capability | `--apply --force` |
 | Delete, retype, override invalid values, or bypass Shopify validation | Unsupported |
 
@@ -72,6 +72,8 @@ Field builders:
 - Lists: wrap a builder with `field.list()`.
 
 Options are type-checked by each builder. Examples include `field.measurement('weight')`, `field.file({ fileTypes: ['Image'] })`, and `field.url({ allowedDomains: ['example.com'] })`.
+
+A metaobject field takes `adminFilterable` but not `access`, `constraints`, or the other capabilities, which Shopify keeps on metafield definitions alone. Declaring one of those on a metaobject field is rejected at compile rather than planned as drift no apply could clear.
 
 Metaobject references name portable types in the schema; the CLI resolves their store-specific IDs and creates dependencies first. Shopify-owned disclosure and taxonomy references are not portable and cannot be declared.
 

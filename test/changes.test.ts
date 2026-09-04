@@ -109,6 +109,31 @@ function store(existing: ExistingSchema, sent: string[] = []) {
 const targets = [{ store: 'a.myshopify.com', explicit: true }];
 const connectTo = (client: unknown) => (async () => client) as unknown as Connect;
 
+// Risk follows the attribute, not the side of the schema it sits on: a metaobject field capability
+// is bucketed by direction exactly as a metafield's is.
+test('a metaobject field capability is applied when enabled and forced when disabled', () => {
+  const desired = (adminFilterable: boolean) => compileSchema(defineSchema({
+    metaobjects: { faq: metaobject({ name: 'FAQ', fields: { question: field.string({ adminFilterable }) } }) },
+    metafields: {},
+  }));
+  const stored = (adminFilterable: boolean): ExistingSchema => ({
+    metaobjects: [{
+      id: 'gid://shopify/MetaobjectDefinition/1', type: 'faq', name: 'FAQ',
+      fields: [{
+        key: 'question', name: 'Question', type: 'single_line_text_field',
+        validations: [], capabilities: { adminFilterable },
+      }],
+    }],
+    metafields: [],
+  });
+  const enabling = classifyDrift(planSchema(desired(true), stored(false))).items[0];
+  assert.deepEqual(enabling?.applies, ['fields.question.capabilities.adminFilterable: expected true, found false']);
+  assert.deepEqual(enabling?.needsForce, []);
+  const disabling = classifyDrift(planSchema(desired(false), stored(true))).items[0];
+  assert.deepEqual(disabling?.applies, []);
+  assert.deepEqual(disabling?.needsForce, ['fields.question.capabilities.adminFilterable: expected false, found true']);
+});
+
 test('classifyDrift sorts drift into applied, needs-force, and nothing-reaches-it', () => {
   const existing = drifted();
   const promo = existing.metafields[0];
@@ -318,6 +343,88 @@ test('a relabel sends the name and nothing else the operator did not declare dri
   assert.deepEqual(sent[0]?.definition, { name: 'FAQ' });
   assert.deepEqual(sent[1]?.definition, {
     ownerType: 'PRODUCT', namespace: 'custom', key: 'promo_text', name: 'Promo text',
+  });
+});
+
+// The same schema with a field description: the label a store drifts on without anyone noticing.
+function described(): CompiledSchema {
+  return compileSchema(defineSchema({
+    metaobjects: {
+      faq: metaobject({
+        name: 'FAQ',
+        displayNameKey: 'question',
+        fields: {
+          question: field.string({ name: 'Question', description: 'Shown on the card', required: true }),
+          answer: field.richText({ name: 'Answer' }),
+        },
+      }),
+    },
+    metafields: {
+      product: {
+        custom: { promo_text: field.string({ name: 'Promo text', adminFilterable: true }) },
+      },
+    },
+  }));
+}
+
+// A store whose field labels were hand-edited in the admin; every operational attribute matches.
+function fieldRelabelled(): ExistingSchema {
+  const existing = drifted();
+  const question = existing.metaobjects[0]?.fields[0];
+  if (question) question.description = 'Admin label only';
+  existing.metaobjects[0]?.fields.push({
+    key: 'answer', name: 'The answer', type: 'rich_text_field', validations: [],
+  });
+  const promo = existing.metafields[0];
+  if (promo) promo.capabilities = { adminFilterable: true };
+  return existing;
+}
+
+test('a field label rewrite carries the label alone, not the rest of the field', async () => {
+  const plan = planSchema(described(), fieldRelabelled());
+  assert.deepEqual(plan.items.map((item) => item.status), ['PRESENT', 'PRESENT']);
+  assert.equal(exitCodeForPlan(plan), 0);
+  const drift = classifyDrift(plan);
+  assert.deepEqual(drift.items.map((entry) => entry.applies), [
+    ['fields.answer.name differs', 'fields.question.description differs'],
+  ]);
+  let variables: Record<string, unknown> = {};
+  const client = new AdminClient({
+    store: 'a.myshopify.com', token: 'shpca_x',
+    fetch: async (_input, init) => {
+      variables = (JSON.parse(String(init?.body)) as { variables: Record<string, unknown> }).variables;
+      return Response.json({ data: { metaobjectDefinitionUpdate: { metaobjectDefinition: { id: '1' }, userErrors: [] } } });
+    },
+  });
+  await client.updateMetaobject(drift.items[0]!);
+  assert.deepEqual(variables.definition, {
+    fieldDefinitions: [
+      { update: { key: 'answer', name: 'Answer' } },
+      { update: { key: 'question', description: 'Shown on the card' } },
+    ],
+  });
+});
+
+test('operational field drift sends the labels that drifted with it and nothing else', async () => {
+  const existing = fieldRelabelled();
+  const question = existing.metaobjects[0]?.fields[0];
+  if (question) question.required = false;
+  const drift = classifyDrift(planSchema(described(), existing));
+  assert.deepEqual(drift.items[0]?.needsForce, ['fields.question.required: expected true, found false']);
+  let variables: Record<string, unknown> = {};
+  const client = new AdminClient({
+    store: 'a.myshopify.com', token: 'shpca_x',
+    fetch: async (_input, init) => {
+      variables = (JSON.parse(String(init?.body)) as { variables: Record<string, unknown> }).variables;
+      return Response.json({ data: { metaobjectDefinitionUpdate: { metaobjectDefinition: { id: '1' }, userErrors: [] } } });
+    },
+  });
+  await client.updateMetaobject(drift.items[0]!, true);
+  assert.deepEqual(variables.definition, {
+    fieldDefinitions: [
+      { update: { key: 'answer', name: 'Answer' } },
+      { update: { key: 'question', description: 'Shown on the card', required: true } },
+    ],
   });
 });
 

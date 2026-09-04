@@ -1,5 +1,5 @@
 import type { ExistingField, ExistingMetafield, ExistingMetaobject } from './planner.js';
-import { FIELD_CAPABILITIES } from './types.js';
+import { FIELD_CAPABILITIES, METAOBJECT_FIELD_CAPABILITIES } from './types.js';
 
 export interface RawField {
   key: string;
@@ -8,6 +8,7 @@ export interface RawField {
   type: { name: string };
   required?: boolean;
   validations: { name: string; value: string }[];
+  capabilities?: Record<string, { enabled: boolean }>;
 }
 
 export interface RawMetafield extends RawField {
@@ -33,7 +34,7 @@ export interface RawMetaobject {
 }
 
 export function mapField(value: RawField): ExistingField {
-  return {
+  const field: ExistingField = {
     key: value.key,
     name: value.name,
     description: value.description,
@@ -41,6 +42,12 @@ export function mapField(value: RawField): ExistingField {
     required: value.required,
     validations: value.validations,
   };
+  if (value.capabilities) {
+    field.capabilities = Object.fromEntries(
+      Object.entries(value.capabilities).map(([key, item]) => [key, item.enabled]),
+    );
+  }
+  return field;
 }
 
 export function mapMetafield(value: RawMetafield): ExistingMetafield {
@@ -50,7 +57,6 @@ export function mapMetafield(value: RawMetafield): ExistingMetafield {
     namespace: value.namespace,
     ownerType: value.ownerType,
     access: value.access,
-    capabilities: Object.fromEntries(Object.entries(value.capabilities).map(([key, item]) => [key, item.enabled])),
     constraints: value.constraints
       ? { key: value.constraints.key, values: value.constraints.values.nodes.map((item) => item.value) }
       : null,
@@ -79,6 +85,7 @@ export function mapMetaobject(value: RawMetaobject): ExistingMetaobject {
 // a capability Shopify adds is then one edit, not two that can silently disagree.
 export const FIELD_SELECTION = `
   key name description type { name } required validations { name value }
+  capabilities { ${METAOBJECT_FIELD_CAPABILITIES.map((name) => `${name} { enabled }`).join(' ')} }
 `;
 
 export const METAFIELD_SELECTION = `

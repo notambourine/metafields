@@ -294,6 +294,89 @@ test('an update can add a reference to a metaobject created in the same run', as
   assert.deepEqual(result.updated, ['metaobject:article']);
 });
 
+// The escape this closes: the planner compared field capabilities that no write carried, so drift
+// on one planned every run and apply cleared none of it, failing post-apply verification instead.
+test('a metaobject field capability is read, created, and updated', async () => {
+  const desired = compileSchema(defineSchema({
+    metaobjects: {
+      faq: metaobject({ name: 'FAQ', fields: { question: field.string({ adminFilterable: true }) } }),
+      article: metaobject({ name: 'Article', fields: { title: field.string({ adminFilterable: true }) } }),
+    },
+    metafields: {},
+  }));
+  const articleId = 'gid://shopify/MetaobjectDefinition/11';
+  let sentCreate: { definition?: { fieldDefinitions?: unknown } } = {};
+  let sentUpdate: { definition?: { fieldDefinitions?: unknown } } = {};
+  let filterable = false;
+  let faqLive = false;
+  const shell = {
+    description: null, displayNameKey: null,
+    access: { admin: 'MERCHANT_READ_WRITE', storefront: 'NONE' },
+    capabilities: { publishable: { enabled: false }, translatable: { enabled: false } },
+  };
+  const client = new AdminClient({
+    store: 'example.myshopify.com',
+    token: 'shpat_x',
+    fetch: async (_input, init) => {
+      const body = JSON.parse(String(init?.body)) as { query: string; variables: Record<string, unknown> };
+      if (body.query.includes('metaobjectDefinitionCreate')) {
+        sentCreate = body.variables as typeof sentCreate;
+        faqLive = true;
+        return response({
+          data: {
+            metaobjectDefinitionCreate: {
+              metaobjectDefinition: { id: 'gid://shopify/MetaobjectDefinition/10', type: 'faq' },
+              userErrors: [],
+            },
+          },
+        });
+      }
+      if (body.query.includes('metaobjectDefinitionUpdate')) {
+        sentUpdate = body.variables as typeof sentUpdate;
+        filterable = true;
+        return response({
+          data: { metaobjectDefinitionUpdate: { metaobjectDefinition: { id: articleId }, userErrors: [] } },
+        });
+      }
+      // faq is absent so it is created; article exists with the capability off, which is the drift.
+      const type = String((body.variables as { type?: string }).type);
+      const titled = (key: string, name: string, enabled: boolean) => ({
+        key, name, description: null, type: { name: 'single_line_text_field' },
+        required: false, validations: [], capabilities: { adminFilterable: { enabled } },
+      });
+      if (type === 'faq') {
+        return response({
+          data: {
+            metaobjectDefinitionByType: faqLive
+              ? { id: 'gid://shopify/MetaobjectDefinition/10', type, name: 'FAQ', ...shell, fieldDefinitions: [titled('question', 'Question', true)] }
+              : null,
+          },
+        });
+      }
+      return response({
+        data: {
+          metaobjectDefinitionByType: {
+            id: articleId, type, name: 'Article', ...shell,
+            fieldDefinitions: [titled('title', 'Title', filterable)],
+          },
+        },
+      });
+    },
+  });
+
+  const result = await synchronize(client, desired, 'apply');
+  assert.deepEqual(sentCreate.definition?.fieldDefinitions, [{
+    key: 'question', type: 'single_line_text_field', name: 'Question',
+    capabilities: { adminFilterable: { enabled: true } },
+  }]);
+  // Only the capability: an update never restates an attribute the plan did not report drifted.
+  assert.deepEqual(sentUpdate.definition?.fieldDefinitions, [{
+    update: { key: 'title', capabilities: { adminFilterable: { enabled: true } } },
+  }]);
+  assert.deepEqual(result.created, ['metaobject:faq']);
+  assert.deepEqual(result.updated, ['metaobject:article']);
+});
+
 test('apply creates metaobjects before metafields and verifies afterward', async () => {
   const desired = compileSchema(defineSchema({
     metaobjects: { faq: metaobject({ name: 'FAQ', fields: { title: field.string() } }) },

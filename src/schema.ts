@@ -2,6 +2,7 @@ import type { MetafieldOwnerType } from './metafield-types.js';
 import {
   FIELD_CAPABILITIES,
   FIELD_MARKER,
+  METAOBJECT_FIELD_CAPABILITIES,
   METAOBJECT_MARKER,
   SCHEMA_MARKER,
   type Validation,
@@ -112,13 +113,33 @@ function normalizeCapabilities(value: unknown, path: string): Record<string, boo
   return result;
 }
 
-function normalizeField(field: unknown, key: string, path: string): CanonicalField {
+// Shopify's metaobject field definition input has no access or constraints, and takes only some of
+// the capabilities a metafield does. Left to compile, any of them would plan drift on every run
+// that no apply could ever clear.
+const metaobjectCapabilities = new Set<string>(METAOBJECT_FIELD_CAPABILITIES);
+const METAFIELD_ONLY_OPTIONS = [
+  'access',
+  'constraints',
+  ...FIELD_CAPABILITIES.filter((capability) => !metaobjectCapabilities.has(capability)),
+];
+
+function normalizeField(
+  field: unknown,
+  key: string,
+  path: string,
+  metaobjectField = false,
+): CanonicalField {
   if (!record(field) || field.__kind !== FIELD_MARKER) fail(path, 'must be created with field.*()');
   if (typeof field.type !== 'string') fail(`${path}.type`, 'must be a string');
   if (!record(field.options)) fail(`${path}.options`, 'must be an object');
   if (!Array.isArray(field.validations)) fail(`${path}.validations`, 'must be an array');
   validateKey(key, path, 2, 64);
   const options = field.options;
+  if (metaobjectField) {
+    for (const option of METAFIELD_ONLY_OPTIONS) {
+      if (options[option] !== undefined) fail(`${path}.${option}`, 'cannot be declared on a metaobject field');
+    }
+  }
   const normalized: CanonicalField = {
     key,
     name: typeof options.name === 'string' ? options.name : humanize(key),
@@ -197,7 +218,7 @@ export function compileSchema(value: unknown): CompiledSchema {
       name: rawDefinition.name,
       fields: Object.entries(rawDefinition.fields)
         .sort(([a], [b]) => a.localeCompare(b))
-        .map(([key, field]) => normalizeField(field, key, `${path}.fields.${key}`)),
+        .map(([key, field]) => normalizeField(field, key, `${path}.fields.${key}`, true)),
     };
     if (typeof rawDefinition.description === 'string') definition.description = rawDefinition.description;
     if (typeof rawDefinition.displayNameKey === 'string') definition.displayNameKey = rawDefinition.displayNameKey;
