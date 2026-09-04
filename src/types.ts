@@ -58,6 +58,13 @@ export const FIELD_CAPABILITIES = [
 
 export type FieldCapability = typeof FIELD_CAPABILITIES[number];
 
+// The capabilities a metaobject field definition accepts, which is not every one a metafield takes.
+// Compile refuses the rest there rather than planning drift no apply could clear, and a test keeps
+// this a subset, so one Shopify adds to either side stays a single edit.
+export const METAOBJECT_FIELD_CAPABILITIES = ['adminFilterable'] as const satisfies readonly FieldCapability[];
+
+export type MetaobjectFieldCapability = typeof METAOBJECT_FIELD_CAPABILITIES[number];
+
 export interface FieldOptions extends Readonly<Partial<Record<FieldCapability, boolean>>> {
   readonly name?: string;
   readonly description?: string;

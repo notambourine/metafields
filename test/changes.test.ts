@@ -109,6 +109,31 @@ function store(existing: ExistingSchema, sent: string[] = []) {
 const targets = [{ store: 'a.myshopify.com', explicit: true }];
 const connectTo = (client: unknown) => (async () => client) as unknown as Connect;
 
+// Risk follows the attribute, not the side of the schema it sits on: a metaobject field capability
+// is bucketed by direction exactly as a metafield's is.
+test('a metaobject field capability is applied when enabled and forced when disabled', () => {
+  const desired = (adminFilterable: boolean) => compileSchema(defineSchema({
+    metaobjects: { faq: metaobject({ name: 'FAQ', fields: { question: field.string({ adminFilterable }) } }) },
+    metafields: {},
+  }));
+  const stored = (adminFilterable: boolean): ExistingSchema => ({
+    metaobjects: [{
+      id: 'gid://shopify/MetaobjectDefinition/1', type: 'faq', name: 'FAQ',
+      fields: [{
+        key: 'question', name: 'Question', type: 'single_line_text_field',
+        validations: [], capabilities: { adminFilterable },
+      }],
+    }],
+    metafields: [],
+  });
+  const enabling = classifyDrift(planSchema(desired(true), stored(false))).items[0];
+  assert.deepEqual(enabling?.applies, ['fields.question.capabilities.adminFilterable: expected true, found false']);
+  assert.deepEqual(enabling?.needsForce, []);
+  const disabling = classifyDrift(planSchema(desired(false), stored(true))).items[0];
+  assert.deepEqual(disabling?.applies, []);
+  assert.deepEqual(disabling?.needsForce, ['fields.question.capabilities.adminFilterable: expected false, found true']);
+});
+
 test('classifyDrift sorts drift into applied, needs-force, and nothing-reaches-it', () => {
   const existing = drifted();
   const promo = existing.metafields[0];

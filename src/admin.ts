@@ -431,11 +431,15 @@ function addLabels(
   }
 }
 
+// No access or constraints here or below: compile refuses them on a metaobject field because
+// Shopify's field definition input has nowhere to put them. Capabilities it does take, but only
+// the ones compile allows, so this projects whatever survived it.
 function fieldCreateInput(field: CanonicalField): Record<string, unknown> {
   const input: Record<string, unknown> = { key: field.key, type: field.type, name: field.name };
   if (field.description !== undefined) input.description = field.description;
   if (field.required !== undefined) input.required = field.required;
   if (field.validations.length > 0) input.validations = field.validations;
+  if (field.capabilities) input.capabilities = capabilityInput(field.capabilities);
   return input;
 }
 
@@ -449,6 +453,9 @@ function fieldUpdateInput(field: CanonicalField, paths: readonly string[]): Reco
     input.required = field.required;
   }
   if (paths.includes('validations differ')) input.validations = field.validations;
+  if (paths.some((path) => path.startsWith('capabilities.')) && field.capabilities) {
+    input.capabilities = capabilityInput(field.capabilities);
+  }
   return input;
 }
 

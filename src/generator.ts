@@ -1,7 +1,7 @@
 import { baseType, builderFor, REFERENCE_VALIDATIONS, VALIDATION_OPTIONS } from './declarable.js';
 import type { ExistingField, ExistingMetafield, ExistingMetaobject } from './planner.js';
 import { isReservedNamespace, type Owner } from './schema.js';
-import { FIELD_CAPABILITIES, type Validation } from './types.js';
+import { FIELD_CAPABILITIES, METAOBJECT_FIELD_CAPABILITIES, type Validation } from './types.js';
 
 export interface PulledSchema {
   metaobjects: ExistingMetaobject[];
@@ -66,8 +66,9 @@ function options(
       .map(([key, value]) => `${key}: ${quote(String(value).toLowerCase())}`);
     if (access.length > 0) result.push(`access: { ${access.join(', ')} }`);
   }
-  if (attributes && !metaobjectField && 'capabilities' in field && field.capabilities) {
-    for (const key of FIELD_CAPABILITIES) {
+  if (attributes && 'capabilities' in field && field.capabilities) {
+    const capabilities: readonly string[] = metaobjectField ? METAOBJECT_FIELD_CAPABILITIES : FIELD_CAPABILITIES;
+    for (const key of capabilities) {
       if (field.capabilities[key] !== undefined) result.push(`${key}: ${String(field.capabilities[key])}`);
     }
   }

@@ -18,7 +18,7 @@ import {
   planSchema,
   transforms,
 } from '../dist/index.js';
-import { FIELD_CAPABILITIES, type FieldCapability } from '../dist/types.js';
+import { FIELD_CAPABILITIES, METAOBJECT_FIELD_CAPABILITIES, type FieldCapability } from '../dist/types.js';
 import { generateSchemaModule } from '../dist/generator.js';
 import { pullSchema } from '../dist/pull.js';
 import { loadSchema } from '../dist/loader.js';
@@ -89,6 +89,41 @@ test('runtime validation rejects reserved namespaces and undeclared references',
     metafields: { product: { custom: { key: field.metaobject('missing') as never } } },
   });
   assert.throws(() => compileSchema(invalid), /undeclared metaobject/);
+});
+
+function metaobjectField(options: Record<string, unknown>) {
+  return defineSchema({
+    metaobjects: { faq: metaobject({ name: 'FAQ', fields: { question: field.string(options as never) } }) },
+    metafields: {},
+  });
+}
+
+// Every one of these describes something the metaobject field definition input cannot carry, so
+// compiling one would plan drift on every run that no apply could clear.
+test('runtime validation rejects metafield-only options on a metaobject field', () => {
+  const declined: Record<string, unknown>[] = [
+    { access: { storefront: 'public_read' } },
+    { constraints: { key: 'type', values: ['shirt'] } },
+    ...FIELD_CAPABILITIES
+      .filter((capability) => !(METAOBJECT_FIELD_CAPABILITIES as readonly string[]).includes(capability))
+      .map((capability) => ({ [capability]: true })),
+  ];
+  for (const options of declined) {
+    assert.throws(
+      () => compileSchema(metaobjectField(options)),
+      new RegExp(`fields\\.question\\.${Object.keys(options)[0] as string}: cannot be declared`),
+    );
+  }
+  // The capabilities Shopify does take there are the whole point of the split.
+  for (const capability of METAOBJECT_FIELD_CAPABILITIES) {
+    const compiled = compileSchema(metaobjectField({ [capability]: true }));
+    assert.equal(compiled.metaobjects[0]?.fields[0]?.capabilities?.[capability], true);
+  }
+  // The declined options on a metafield are what they exist for.
+  assert.doesNotThrow(() => compileSchema(defineSchema({
+    metaobjects: {},
+    metafields: { product: { custom: { promo: field.string({ access: { storefront: 'public_read' }, uniqueValues: true }) } } },
+  })));
 });
 
 test('planner creates missing definitions and detects operational and cosmetic drift', () => {
@@ -304,7 +339,10 @@ test('pull reads a store with a money-typed metaobject field, in either directio
         access: { admin: null, storefront: 'PUBLIC_READ' },
         capabilities: { publishable: { enabled: false }, translatable: { enabled: false } },
         fieldDefinitions: [
-          { key: 'label', name: 'Label', type: { name: 'single_line_text_field' }, required: true, validations: [] },
+          {
+            key: 'label', name: 'Label', type: { name: 'single_line_text_field' }, required: true,
+            validations: [], capabilities: { adminFilterable: { enabled: true } },
+          },
           { key: 'price', name: 'Price', type: { name: 'money' }, required: false, validations: [] },
         ],
       }],
@@ -328,6 +366,8 @@ test('pull reads a store with a money-typed metaobject field, in either directio
   const full = generateSchemaModule(await pullSchema(client, { ...options, metaobjects: true }));
   assert.deepEqual(full.skipped, []);
   assert.match(full.module, /price: field\.money\(\{ name: "Price" \}\)/);
+  // A metaobject field carries the one capability Shopify keeps there, and none of the rest.
+  assert.match(full.module, /label: field\.string\(\{ name: "Label", required: true, adminFilterable: true \}\)/);
   assert.match(full.module, /chain: field\.metaobject\("chain_length", \{ name: "Chain", access: \{ storefront: "public_read" \}/);
 
   // Without --metaobjects the reference has nothing to name, so the definition carries the advice

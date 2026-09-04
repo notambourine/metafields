@@ -73,6 +73,8 @@ Field builders:
 
 Options are type-checked by each builder. Examples include `field.measurement('weight')`, `field.file({ fileTypes: ['Image'] })`, and `field.url({ allowedDomains: ['example.com'] })`.
 
+A metaobject field takes `adminFilterable` but not `access`, `constraints`, or the other capabilities, which Shopify keeps on metafield definitions alone. Declaring one of those on a metaobject field is rejected at compile rather than planned as drift no apply could clear.
+
 Metaobject references name portable types in the schema; the CLI resolves their store-specific IDs and creates dependencies first. Shopify-owned disclosure and taxonomy references are not portable and cannot be declared.
 
 Infer application types directly from the schema:
