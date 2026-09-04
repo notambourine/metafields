@@ -50,11 +50,9 @@ export async function pullSchema(client: AdminClient, options: PullOptions): Pro
     }
   }
 
-  // Without --metaobjects there is nothing for a reference to name, so the generator reports those
-  // metafields as skipped. Refusing the whole read instead would leave the operator nothing.
+  // Without metaobjects, skip references that have no portable target name.
   const metaobjects: ExistingMetaobject[] = [];
-  // Reserved definitions are excluded from the schema but stay in the index: a kept metafield may
-  // still reference one, and naming its type beats emitting an id no other store shares.
+  // Keep excluded definitions in the index to resolve references to portable type names.
   const typeById = new Map<string, string>();
   if (options.metaobjects) {
     let after: string | null = null;

@@ -33,8 +33,7 @@ export type MetaobjectReference<Key extends string> = string & {
   readonly __metaobjectType?: Key;
 };
 
-// Measurements differ only by unit, so the registry names them rather than a builder each: a unit
-// Shopify adds becomes declarable as soon as the generated table is refreshed.
+// Derive measurement names from the generated registry so new units need no builder change.
 export type MeasurementType = {
   [K in MetafieldTypeName]: K extends `list.${string}`
     ? never
@@ -46,8 +45,7 @@ export interface Validation {
   readonly value: string;
 }
 
-// Every field capability, named once. FieldOptions takes its keys from here, compile and pull walk
-// it, and the Admin selection is built from it, so one Shopify adds is a single edit.
+// Share capability names across options, compilation, pull, and Admin selections.
 export const FIELD_CAPABILITIES = [
   'adminFilterable',
   'analyticsQueryable',
@@ -58,9 +56,7 @@ export const FIELD_CAPABILITIES = [
 
 export type FieldCapability = typeof FIELD_CAPABILITIES[number];
 
-// The capabilities a metaobject field definition accepts, which is not every one a metafield takes.
-// Compile refuses the rest there rather than planning drift no apply could clear, and a test keeps
-// this a subset, so one Shopify adds to either side stays a single edit.
+// Restrict metaobject fields to capabilities accepted by Shopify.
 export const METAOBJECT_FIELD_CAPABILITIES = ['adminFilterable'] as const satisfies readonly FieldCapability[];
 
 export type MetaobjectFieldCapability = typeof METAOBJECT_FIELD_CAPABILITIES[number];
@@ -103,8 +99,7 @@ export interface DateOptions extends FieldOptions {
   readonly max?: string;
 }
 
-// Shopify stores a rating alongside the scale it was recorded on, and rejects a definition that
-// omits either bound.
+// Shopify requires both rating bounds.
 export interface RatingOptions extends FieldOptions {
   readonly scaleMin: number;
   readonly scaleMax: number;
@@ -124,8 +119,7 @@ export interface JsonOptions extends FieldOptions {
   readonly schema?: object;
 }
 
-// Shopify names the accepted kinds and hosts as free-form strings rather than an enum, so the
-// values stay unconstrained here and the store rejects the ones it does not know.
+// Shopify validates these free-form file kinds and hosts.
 export interface FileOptions extends FieldOptions {
   readonly fileTypes?: readonly string[];
 }

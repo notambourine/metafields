@@ -1,5 +1,3 @@
-// Checks whether this release describes the selected Shopify API without store credentials.
-// Actionable differences are findings; checks that cannot run throw instead.
 
 import { DEFAULT_API_VERSION } from './admin.js';
 import { compareRegistry } from './type-check.js';
@@ -36,11 +34,11 @@ export async function runDoctor(
       return report(version, [{
         name: 'api-version',
         ok: false,
-        summary: `api version ${version} is not one Shopify serves`,
+        summary: `Shopify rejects API version ${version}`,
         details: [
           version === DEFAULT_API_VERSION
-            ? 'this release pins a version that has aged out; upgrade @notambourine/metafields'
-            : 'pass --api-version with a version Shopify still supports',
+            ? 'DEFAULT_API_VERSION is unsupported; upgrade @notambourine/metafields'
+            : 'pass a supported version with --api-version',
         ],
       }]);
     }
@@ -65,11 +63,10 @@ export async function runDoctor(
       summary: types.matches
         ? `type table matches the Admin API ${version}`
         : `type table differs from the Admin API ${version}`,
-      // No upgrade carries a table for a version this release was not generated against, so
-      // saying "upgrade" off-version would send someone after a release that cannot exist.
+      // A nondefault version mismatch does not imply stale bundled metadata.
       details: types.matches ? [] : [...differences, version === DEFAULT_API_VERSION
-        ? 'upgrade @notambourine/metafields, or open an issue if it is already current'
-        : `this release ships the table for ${DEFAULT_API_VERSION}, not ${version}`],
+        ? 'upgrade @notambourine/metafields or report stale metadata in the current release'
+        : `bundled registry uses ${DEFAULT_API_VERSION}; requested ${version}`],
     },
   ]);
 }

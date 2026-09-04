@@ -3,8 +3,7 @@
 
 export interface MetafieldTypeInfo {
   readonly category: string;
-  // Whether values that predate a definition can be adopted into one of this type. It is not
-  // a statement about retyping a definition that already exists, which Shopify never allows.
+  // Whether existing values can be adopted into a new definition of this type.
   readonly migratable: boolean;
   readonly validations: readonly string[];
 }

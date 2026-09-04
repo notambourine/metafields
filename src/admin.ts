@@ -33,8 +33,7 @@ export function normalizeStore(store: string): string {
   return value;
 }
 
-// Every Shopify credential prefix, not just the legacy shpat_ one, because a minted
-// client-credentials token is the value most likely to reach a fleet CI log.
+// Redact static and client-credential tokens before errors reach fleet logs.
 export function redactSecrets(message: string): string {
   return message.replace(/shp(at|ca|pa|ss|us)_[A-Za-z0-9_-]+/g, '[REDACTED]');
 }
@@ -50,8 +49,7 @@ interface GraphqlEnvelope<T> {
   extensions?: { cost?: { throttleStatus?: { currentlyAvailable?: number; restoreRate?: number } } };
 }
 
-// A rate limit arrives as HTTP 200 carrying this code, so it never reaches the status checks.
-// MAX_COST_EXCEEDED is deliberately not throttling: that query costs too much every time.
+// GraphQL throttling arrives in HTTP 200; MAX_COST_EXCEEDED is not retryable.
 function isThrottled(errors: readonly GraphqlError[]): boolean {
   return errors.some((error) => error.extensions?.code === 'THROTTLED' || /^throttled$/i.test(error.message.trim()));
 }
@@ -73,8 +71,6 @@ export class AdminClient {
   readonly #timeoutMs: number;
   readonly #retries: number;
   readonly #fetch: typeof globalThis.fetch;
-  // Every metaobject definition this client has read or created, both ways round: writes need the
-  // id a schema names by type, reads need the type behind the id Shopify returns.
   readonly #idByType = new Map<string, string>();
   readonly #typeById = new Map<string, string>();
 
@@ -95,8 +91,8 @@ export class AdminClient {
   }
 
   async request<T>(query: string, variables: Record<string, unknown> = {}, mutation = false): Promise<T> {
-    // A timeout or 5xx may have landed, but Shopify rejects THROTTLED before execution.
-    // Retry only the latter to avoid duplicate creates.
+    // Mutations retry only THROTTLED, which Shopify rejects before execution.
+    // Retrying timeouts or 5xx responses could duplicate a completed mutation.
     const attempts = this.#retries + 1;
     const retriesTransient = !mutation;
     let lastError: unknown;
@@ -181,14 +177,11 @@ export class AdminClient {
     this.#typeById.set(id, type);
   }
 
-  // A stored reference names an id, a schema names a type. Comparing and regenerating both happen
-  // against the schema's vocabulary, so a read answers in it.
   #portable<T extends ExistingField>(field: T): T {
     return toPortableField(field, this.#typeById);
   }
 
-  // References are resolved before the input builders run, so those stay a plain projection.
-  // Every referenced metaobject was read or created by now: creates precede updates.
+  // Creates precede updates, so every referenced metaobject has an ID here.
   #resolved(entry: DriftItem): DriftItem {
     const desired = entry.item.kind === 'metaobject'
       ? toStoreMetaobject(entry.item.desired as CanonicalMetaobject, this.#idByType)
@@ -205,7 +198,6 @@ export class AdminClient {
     }>(METAOBJECT_CREATE, { definition: metaobjectCreateInput(toStoreMetaobject(definition, this.#idByType)) }, true);
     const payload = data.metaobjectDefinitionCreate;
     assertMutation(payload.metaobjectDefinition, payload.userErrors, `metaobject:${definition.type}`);
-    // Metafields referencing this metaobject are created later in the same run, by type.
     this.#remember(definition.type, payload.metaobjectDefinition?.id);
   }
 
@@ -242,8 +234,6 @@ export interface ApplyResult {
   plan: Plan;
   created: string[];
   updated: string[];
-  // Definitions this run deliberately left alone, whole: they need `--force`, or nothing reaches
-  // them. Skipping some does not stop the rest, which is what keeps a fleet uniform.
   skipped: string[];
 }
 
@@ -262,8 +252,7 @@ export async function applyPlan(
   const updated: string[] = [];
   const skipped = deferred(drift, force).map((entry) => entry.item.identity);
   try {
-    // Metaobject creates run first so an update can reference a metaobject born this run; updates
-    // still precede metafield creates so a new metafield lands against already-corrected shape.
+    // Create metaobjects before references and update definitions before creating metafields.
     for (const item of plan.items.filter((value) => value.kind === 'metaobject' && value.status === 'CREATE')) {
       await client.createMetaobject(item.desired as CanonicalMetaobject);
       created.push(item.identity);
@@ -286,8 +275,7 @@ export async function applyPlan(
     throw new AdminError(`${error instanceof Error ? error.message : String(error)}${trail}`);
   }
   const after = planSchema(schema, await client.readSchema(schema));
-  // Only the writes this run made have to have landed. Drift it chose to skip is expected to
-  // still be there, and reporting it as a failed verification would hide a real one.
+  // Verify attempted writes only; deferred drift is expected to remain.
   const attempted = planFrom(after.items.filter((item) => !skipped.includes(item.identity)));
   if (exitCodeForPlan(attempted) !== 0) {
     throw new AdminError(`post-apply verification failed; created: ${created.join(', ') || 'none'}`);
@@ -312,8 +300,6 @@ export async function synchronize(
 
 interface UserError { field?: string[]; message: string; code?: string }
 
-// Each mutation names its payload field differently, so the caller passes the definition it
-// found rather than a shape this has to know about.
 function assertMutation(definition: unknown, userErrors: UserError[], identity: string): void {
   if (userErrors.length > 0) {
     throw new AdminError(`${identity}: ${userErrors.map((error) => error.message).join('; ')}`);
@@ -339,8 +325,7 @@ function metafieldCreateInput(definition: CanonicalMetafield): Record<string, un
   return input;
 }
 
-// An update only ever sends the attributes the plan reported as drifted, so it never carries an
-// opinion about something the operator did not declare.
+// Avoid rewriting attributes not reported as drifted.
 function metafieldUpdateInput(entry: DriftItem, force: boolean): Record<string, unknown> {
   const definition = entry.item.desired as CanonicalMetafield;
   const paths = changedPaths(entry, force);
@@ -361,8 +346,7 @@ function metafieldUpdateInput(entry: DriftItem, force: boolean): Record<string, 
   return input;
 }
 
-// Constraint values are created and deleted one by one, so the stored set has to be diffed
-// against the declared one rather than replaced.
+// Shopify adds and removes constraint values individually.
 function constraintsUpdateInput(
   definition: CanonicalMetafield,
   existing: ExistingField | undefined,
@@ -410,16 +394,13 @@ function metaobjectUpdateInput(entry: DriftItem, force: boolean): Record<string,
     const field = missing.has(key) ? undefined : declared.get(key);
     if (!field) continue;
     const update = fieldUpdateInput(field, changed);
-    // `key` alone identifies the field, so an input holding nothing else is a write with no
-    // opinion; Shopify would accept it and the operator would read it as a change.
+    // Omit key-only field updates; Shopify accepts them as no-op writes.
     if (Object.keys(update).length > 1) operations.push({ update });
   }
   if (operations.length > 0) input.fieldDefinitions = operations;
   return input;
 }
 
-// Both are labels, so both are sent only when the plan reported them drifted; an unchanged name
-// is the same no-op either way, and an update to something else never rewrites one silently.
 function addLabels(
   input: Record<string, unknown>,
   paths: readonly string[],
@@ -431,9 +412,7 @@ function addLabels(
   }
 }
 
-// No access or constraints here or below: compile refuses them on a metaobject field because
-// Shopify's field definition input has nowhere to put them. Capabilities it does take, but only
-// the ones compile allows, so this projects whatever survived it.
+// Metaobject fields cannot carry access or constraints.
 function fieldCreateInput(field: CanonicalField): Record<string, unknown> {
   const input: Record<string, unknown> = { key: field.key, type: field.type, name: field.name };
   if (field.description !== undefined) input.description = field.description;
@@ -443,9 +422,7 @@ function fieldCreateInput(field: CanonicalField): Record<string, unknown> {
   return input;
 }
 
-// Scoped the same way a definition update is: only the attributes the plan reported drifted, so
-// relabelling a field never restates its validations or required flag. No `type` (Shopify will
-// not retype a field) and no `delete` operation is ever emitted.
+// Send only drifted attributes. Shopify cannot retype fields, and deletes are unsupported.
 function fieldUpdateInput(field: CanonicalField, paths: readonly string[]): Record<string, unknown> {
   const input: Record<string, unknown> = { key: field.key };
   addLabels(input, paths, field);
@@ -496,8 +473,7 @@ query MetaobjectDefinition($type: String!) {
   metaobjectDefinitionByType(type: $type) { ${METAOBJECT_SELECTION} }
 }`;
 
-// Owner, namespace and key travel in `identifier`, never as top-level arguments: the only other
-// selector is `id`, which is deprecated and which a schema-first tool has no way to know.
+// Schema-defined metafields use `identifier`; the alternative `id` selector is unavailable.
 const METAFIELD_QUERY = `
 query MetafieldDefinition($identifier: MetafieldDefinitionIdentifierInput!) {
   metafieldDefinition(identifier: $identifier) { ${METAFIELD_SELECTION} }
@@ -519,8 +495,6 @@ mutation CreateMetafieldDefinition($definition: MetafieldDefinitionInput!) {
   }
 }`;
 
-// Neither update carries a `delete` field operation or a `type`: an update rewrites shape the
-// operator declared and nothing else.
 const METAOBJECT_UPDATE = `
 mutation UpdateMetaobjectDefinition($id: ID!, $definition: MetaobjectDefinitionUpdateInput!) {
   metaobjectDefinitionUpdate(id: $id, definition: $definition) {

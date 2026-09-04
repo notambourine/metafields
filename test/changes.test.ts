@@ -39,7 +39,6 @@ function schema(): CompiledSchema {
   }));
 }
 
-// The same schema, plus the one attribute whose change can stop a live storefront reading a field.
 function restricted(): CompiledSchema {
   return compileSchema(defineSchema({
     metaobjects: {
@@ -64,7 +63,6 @@ function restricted(): CompiledSchema {
   }));
 }
 
-// A store whose faq is missing the `answer` field and whose promo_text capability is off.
 function drifted(): ExistingSchema {
   return {
     metaobjects: [{
@@ -109,9 +107,7 @@ function store(existing: ExistingSchema, sent: string[] = []) {
 const targets = [{ store: 'a.myshopify.com', explicit: true }];
 const connectTo = (client: unknown) => (async () => client) as unknown as Connect;
 
-// Risk follows the attribute, not the side of the schema it sits on: a metaobject field capability
-// is bucketed by direction exactly as a metafield's is.
-test('a metaobject field capability is applied when enabled and forced when disabled', () => {
+test('enabling a metaobject field capability is safe; disabling requires force', () => {
   const desired = (adminFilterable: boolean) => compileSchema(defineSchema({
     metaobjects: { faq: metaobject({ name: 'FAQ', fields: { question: field.string({ adminFilterable }) } }) },
     metafields: {},
@@ -134,7 +130,7 @@ test('a metaobject field capability is applied when enabled and forced when disa
   assert.deepEqual(disabling?.needsForce, ['fields.question.capabilities.adminFilterable: expected false, found true']);
 });
 
-test('classifyDrift sorts drift into applied, needs-force, and nothing-reaches-it', () => {
+test('classifyDrift separates applicable, forced, and blocked drift', () => {
   const existing = drifted();
   const promo = existing.metafields[0];
   if (promo) {
@@ -158,7 +154,7 @@ test('classifyDrift sorts drift into applied, needs-force, and nothing-reaches-i
   assert.deepEqual([drift.applies, drift.needsForce, drift.blocked], [1, 0, 1]);
 });
 
-test('IN_PROGRESS validation is never written, not even a label', () => {
+test('IN_PROGRESS validation blocks all writes', () => {
   const existing = drifted();
   const promo = existing.metafields[0];
   if (promo) promo.validationStatus = 'IN_PROGRESS';
@@ -168,7 +164,7 @@ test('IN_PROGRESS validation is never written, not even a label', () => {
   assert.match(metafield?.blocked.join() ?? '', /validation is in progress/);
 });
 
-test('a definition needing force is skipped whole, so its safe drift waits with it', async () => {
+test('force-required drift defers its entire definition', async () => {
   const fake = store(drifted());
   const result = await synchronizeFleet(
     targets, restricted(), 'apply', connectTo(fake.client),
@@ -179,7 +175,7 @@ test('a definition needing force is skipped whole, so its safe drift waits with 
   assert.equal(fleetExitCode(result), 1);
 });
 
-test('--force writes the skipped definition, drift and all', async () => {
+test('--force applies all deferred drift', async () => {
   const fake = store(drifted());
   const result = await synchronizeFleet(
     targets, restricted(), 'apply', connectTo(fake.client), { force: true },
@@ -189,7 +185,7 @@ test('--force writes the skipped definition, drift and all', async () => {
   assert.equal(fleetExitCode(result), 0);
 });
 
-test('--apply updates metaobjects before metafields and verifies afterward', async () => {
+test('--apply updates metaobjects before metafields and then verifies', async () => {
   const fake = store(drifted());
   const result = await synchronizeFleet(targets, schema(), 'apply', connectTo(fake.client));
   assert.deepEqual(fake.sent, ['metaobject:faq', 'metafield:PRODUCT:custom.promo_text']);
@@ -197,7 +193,7 @@ test('--apply updates metaobjects before metafields and verifies afterward', asy
   assert.equal(fleetExitCode(result), 0);
 });
 
-test('--dry-run cancels the write and still reports the drift that remains', async () => {
+test('--dry-run skips writes and reports remaining drift', async () => {
   const fake = store(drifted());
   const result = await synchronizeFleet(
     targets, restricted(), 'dry-run', connectTo(fake.client), { force: true },
@@ -207,8 +203,7 @@ test('--dry-run cancels the write and still reports the drift that remains', asy
   assert.equal(fleetExitCode(result), 1);
 });
 
-test('a store that needs force does not stop the applied set reaching the rest of the fleet', async () => {
-  // Store a has only drift --apply resolves; store b also narrows storefront access.
+test('force-required drift does not block other fleet stores', async () => {
   const permitted = drifted();
   const promo = permitted.metafields[0];
   if (promo) promo.access = { storefront: 'NONE' };
@@ -229,7 +224,7 @@ test('a store that needs force does not stop the applied set reaching the rest o
   assert.equal(fleetExitCode(result), 1);
 });
 
-test('an update adds a field and never deletes or retypes one', async () => {
+test('updates add fields without deleting or retyping fields', async () => {
   const sent: { query: string; variables: Record<string, unknown> }[] = [];
   const client = new AdminClient({
     store: 'a.myshopify.com', token: 'shpca_x',
@@ -250,7 +245,7 @@ test('an update adds a field and never deletes or retypes one', async () => {
   assert.match(sent[0]?.query ?? '', /metaobjectDefinitionUpdate/);
 });
 
-test('a metafield update diffs constraint values instead of replacing them', async () => {
+test('metafield updates diff constraint values', async () => {
   const constrained = compileSchema(defineSchema({
     metaobjects: {},
     metafields: {
@@ -275,7 +270,6 @@ test('a metafield update diffs constraint values instead of replacing them', asy
     promo.access = {};
     promo.constraints = { key: 'type', values: ['shirt', 'mug'] };
   }
-  // Constraints need force, so the update only carries them when it is passed.
   const entry = classifyDrift(planSchema(constrained, existing)).items[0];
   await client.updateMetafield(entry!, true);
   const definition = variables.definition as Record<string, unknown>;
@@ -285,7 +279,6 @@ test('a metafield update diffs constraint values instead of replacing them', asy
   assert.equal('type' in definition, false);
 });
 
-// A store where only the labels drift: every operational attribute already matches.
 function relabelled(): ExistingSchema {
   const existing = drifted();
   const faq = existing.metaobjects[0];
@@ -302,7 +295,7 @@ function relabelled(): ExistingSchema {
   return existing;
 }
 
-test('cosmetic drift is applied by default and still leaves the plan PRESENT', () => {
+test('cosmetic drift applies by default and leaves the plan PRESENT', () => {
   const plan = planSchema(schema(), relabelled());
   assert.deepEqual(plan.items.map((item) => item.status), ['PRESENT', 'PRESENT']);
   assert.equal(exitCodeForPlan(plan), 0);
@@ -313,7 +306,7 @@ test('cosmetic drift is applied by default and still leaves the plan PRESENT', (
   assert.equal(drift.applies, 2);
 });
 
-test('a definition still validating is never relabelled either', () => {
+test('validation in progress blocks label updates', () => {
   const existing = relabelled();
   const promo = existing.metafields[0];
   if (promo) promo.validationStatus = 'IN_PROGRESS';
@@ -323,7 +316,7 @@ test('a definition still validating is never relabelled either', () => {
   assert.equal(metafield?.blocked.length, 2);
 });
 
-test('a relabel sends the name and nothing else the operator did not declare drifted', async () => {
+test('definition relabels send only the drifted name', async () => {
   const sent: Record<string, unknown>[] = [];
   const client = new AdminClient({
     store: 'a.myshopify.com', token: 'shpca_x',
@@ -346,7 +339,6 @@ test('a relabel sends the name and nothing else the operator did not declare dri
   });
 });
 
-// The same schema with a field description: the label a store drifts on without anyone noticing.
 function described(): CompiledSchema {
   return compileSchema(defineSchema({
     metaobjects: {
@@ -367,7 +359,6 @@ function described(): CompiledSchema {
   }));
 }
 
-// A store whose field labels were hand-edited in the admin; every operational attribute matches.
 function fieldRelabelled(): ExistingSchema {
   const existing = drifted();
   const question = existing.metaobjects[0]?.fields[0];
@@ -380,7 +371,7 @@ function fieldRelabelled(): ExistingSchema {
   return existing;
 }
 
-test('a field label rewrite carries the label alone, not the rest of the field', async () => {
+test('field relabels send only the drifted label', async () => {
   const plan = planSchema(described(), fieldRelabelled());
   assert.deepEqual(plan.items.map((item) => item.status), ['PRESENT', 'PRESENT']);
   assert.equal(exitCodeForPlan(plan), 0);
@@ -405,7 +396,7 @@ test('a field label rewrite carries the label alone, not the rest of the field',
   });
 });
 
-test('operational field drift sends the labels that drifted with it and nothing else', async () => {
+test('operational updates include drifted labels only', async () => {
   const existing = fieldRelabelled();
   const question = existing.metaobjects[0]?.fields[0];
   if (question) question.required = false;
@@ -428,7 +419,7 @@ test('operational field drift sends the labels that drifted with it and nothing 
   });
 });
 
-test('an update of operational drift leaves an undrifted name alone', async () => {
+test('operational updates omit unchanged names', async () => {
   let variables: Record<string, unknown> = {};
   const client = new AdminClient({
     store: 'a.myshopify.com', token: 'shpca_x',
@@ -443,7 +434,7 @@ test('an update of operational drift leaves an undrifted name alone', async () =
   assert.equal('name' in (variables.definition as Record<string, unknown>), false);
 });
 
-test('a userErrors refusal reaches the operator intact', async () => {
+test('userErrors reach the operator unchanged', async () => {
   const fake = store(drifted());
   fake.client.updateMetaobject = async () => {
     throw new Error('metaobject:faq: Cannot set required on field answer: 4 entries have no value');
@@ -453,9 +444,7 @@ test('a userErrors refusal reaches the operator intact', async () => {
   assert.equal(fleetExitCode(result), 2);
 });
 
-// The one failure mode a generic flag name creates is someone hitting an unrelated refusal and
-// reaching for --force, so every blocker says that it cannot.
-test('a blocked definition is told what --force will not do for it', () => {
+test('blocked definitions explain why --force cannot help', () => {
   const existing = drifted();
   const promo = existing.metafields[0];
   if (promo) {
@@ -467,14 +456,14 @@ test('a blocked definition is told what --force will not do for it', () => {
     .find((item) => item.item.kind === 'metafield');
   const advice = entry!.blocked.map((reason) => blockedAdvice(entry!.item, reason));
   assert.deepEqual(advice, [
-    'Shopify will not retype a definition that holds values. --force cannot do this; use a migration.',
-    'Invalid stored values are data, not shape. --force cannot do this; correct the values.',
+    'Retyping definitions with stored values is unsupported. Use a migration.',
+    'Invalid stored values block schema updates. Correct the values.',
   ]);
 });
 
 const execFileAsync = promisify(execFile);
 
-test('--force alone is an error; with --apply it survives flag validation', async () => {
+test('--force requires --apply', async () => {
   const run = (args: string[]) => execFileAsync(process.execPath, ['./dist/cli.js', ...args], {
     env: { ...process.env, SHOPIFY_ADMIN_ACCESS_TOKEN: '', SHOPIFY_APP_CLIENT_ID: '', SHOPIFY_APP_SECRET: '' },
   }).then(() => '', (error: { stderr?: string }) => error.stderr ?? '');

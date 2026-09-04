@@ -2,8 +2,6 @@ import type { Plan, PlanItem } from './planner.js';
 
 export interface DriftItem {
   item: PlanItem;
-  // A definition is atomic: blocked drift, or unforced risky drift, defers every change.
-  // This prevents a safe-looking partial update from hiding unresolved shape.
   applies: string[];
   needsForce: string[];
   blocked: string[];
@@ -21,7 +19,7 @@ export function classifyDrift(plan: Plan): DriftPlan {
   for (const item of plan.items) {
     if (item.status === 'CREATE') continue;
     const buckets: Record<Bucket, string[]> = { apply: [], force: [], blocked: [] };
-    // Labels are safe to rewrite but remain notices, so cosmetic-only drift still exits 0.
+    // Labels remain notices so cosmetic drift exits 0.
     for (const reason of [...item.reasons, ...item.notices]) buckets[bucketFor(item, reason)].push(reason);
     const entry: DriftItem = { item, applies: buckets.apply, needsForce: buckets.force, blocked: buckets.blocked };
     if (entry.applies.length + entry.needsForce.length + entry.blocked.length > 0) items.push(entry);
@@ -34,44 +32,35 @@ export function classifyDrift(plan: Plan): DriftPlan {
   };
 }
 
-// The definitions this run rewrites. Everything else is left exactly as the store has it.
 export function written(drift: DriftPlan, force: boolean): DriftItem[] {
   return drift.items.filter((entry) => writes(entry, force));
 }
 
-// The drift still standing after this run: what force cannot reach, plus what it could have
-// reached had it been passed. Post-apply verification ignores these; the exit code does not.
 export function deferred(drift: DriftPlan, force: boolean): DriftItem[] {
   return drift.items.filter((entry) => !writes(entry, force));
 }
 
-// The attributes an update carries, so a write never states an opinion about something the
-// operator did not declare drifted.
 export function changedPaths(entry: DriftItem, force: boolean): string[] {
   const reasons = force ? [...entry.applies, ...entry.needsForce] : entry.applies;
   return reasons.map((reason) => attribute(entry.item, reason));
 }
 
-// Reasons carry the item identity for metafields but not for metaobjects, so strip it before
-// matching an attribute path.
 export function attribute(item: PlanItem, reason: string): string {
   return reason.startsWith(`${item.identity}.`) ? reason.slice(item.identity.length + 1) : reason;
 }
 
-// Why `--force` is the wrong reach. Someone hitting an unrelated refusal and typing `--force`
-// is the one failure mode a generic flag name creates; saying so where they are looking closes it.
 export function blockedAdvice(item: PlanItem, reason: string): string {
   const path = attribute(item, reason);
   if (/(^|\.)type: expected /.test(path)) {
-    return 'Shopify will not retype a definition that holds values. --force cannot do this; use a migration.';
+    return 'Retyping definitions with stored values is unsupported. Use a migration.';
   }
   if (path.startsWith('stored values include ')) {
-    return 'Invalid stored values are data, not shape. --force cannot do this; correct the values.';
+    return 'Invalid stored values block schema updates. Correct the values.';
   }
   if (item.status === 'INDETERMINATE') {
-    return 'Shopify is still validating stored values. --force cannot do this; wait and re-run.';
+    return 'Shopify is validating stored values. Wait and rerun.';
   }
-  return 'This definition cannot be read back for update. --force cannot do this.';
+  return 'The stored definition lacks the ID required for updates.';
 }
 
 type Bucket = 'apply' | 'force' | 'blocked';
@@ -81,17 +70,16 @@ function writes(entry: DriftItem, force: boolean): boolean {
 }
 
 function bucketFor(item: PlanItem, reason: string): Bucket {
-  // IN_PROGRESS validation: wait, do not write, not even a label.
+  // Do not write while validation is in progress.
   if (item.status === 'INDETERMINATE') return 'blocked';
-  // A metaobject update needs the definition's Shopify id, which only a read supplies.
+  // Metaobject updates require the stored definition ID.
   if (item.kind === 'metaobject' && item.existing?.id === undefined) return 'blocked';
   const path = attribute(item, reason);
-  // Shopify will not retype a definition that has stored values; that is what migrations are for.
+  // Retypes require a migration.
   if (/(^|\.)type: expected /.test(path)) return 'blocked';
-  // Invalid stored values are data, not shape.
+  // Stored-value errors are data problems, not schema drift.
   if (path.startsWith('stored values include ')) return 'blocked';
-  // Risk follows the attribute, not direction; capabilities are the exception because their
-  // direction is explicit and enabling one is harmless.
+  // Risk follows the attribute. Enabling a capability is the safe directional exception.
   if (/(^|\.)capabilities\.[^:]+: expected false/.test(path)) return 'force';
   if (/(^|\.)access\./.test(path)) return 'force';
   if (/(^|\.)(validations|constraints) differ$/.test(path)) return 'force';

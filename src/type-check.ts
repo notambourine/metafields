@@ -1,5 +1,4 @@
-// A difference on the generated API version means this release is stale; on another version,
-// the shipped table was never authoritative and upgrading cannot repair the mismatch.
+// Recommend upgrades only when the bundled registry version is stale.
 
 import { METAFIELD_OWNER_TYPES, METAFIELD_TYPES, type MetafieldTypeInfo } from './metafield-types.js';
 import type { Registry, RegistryType } from './type-registry.js';
@@ -21,8 +20,7 @@ function validationsOf(type: RegistryType): string[] {
   return type.supportedValidations.map((validation) => validation.name).sort();
 }
 
-// Only what the generated table actually carries. A field the generator drops is not a
-// difference this package can act on, and reporting it would be noise in someone else's CI.
+// Compare only fields retained by the generated registry.
 function changes(live: RegistryType, shipped: MetafieldTypeInfo): string[] {
   const differences: string[] = [];
   if (live.category !== shipped.category) {

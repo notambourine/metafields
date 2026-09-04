@@ -194,8 +194,7 @@ export const field = {
         ? `list.${validation.name}`
         : validation.name,
     }));
-    // The list options bound how many entries a value may hold; the inner builder's validations
-    // bound each entry, and Shopify accepts both on the same definition.
+    // List options bound entry count; inner validations bound each entry.
     return {
       __kind: FIELD_MARKER,
       type: `list.${inner.type}`,

@@ -47,7 +47,6 @@ async function main(argv: string[]): Promise<number> {
     process.stdout.write(`${await packageVersion()}\n`);
     return 0;
   }
-  // Alone it modifies nothing: there is no write for it to widen.
   if (args.flags.has('force') && !args.flags.has('apply') && args.command !== 'emit') {
     throw new Error('--force requires --apply');
   }
@@ -59,8 +58,7 @@ async function main(argv: string[]): Promise<number> {
   return syncCommand(args);
 }
 
-// The one command that reaches Shopify without a store: shopify.dev proxies the type list to
-// anyone. Kept out of sync so that no store operation depends on shopify.dev being up.
+// Doctor uses Shopify's public type registry; store operations do not depend on it.
 async function doctorCommand(args: Arguments): Promise<number> {
   if (args.positional.length > 0) throw new Error('doctor accepts no positional arguments');
   const report = await runDoctor(oneValue(args, 'api-version', false));
@@ -82,8 +80,7 @@ async function syncCommand(args: Arguments): Promise<number> {
   const path = onlyPositional(args, 'schema module');
   const schema = await loadSchema(path);
   if (args.flags.has('validate')) {
-    // Every offender at once: one create rejected mid-run leaves a store half-applied
-    // behind an error that reads transient.
+    // Report every invalid description before any create can leave the store partially applied.
     const violations = descriptionViolations(schema);
     if (violations.length > 0) {
       output(args, { status: 'invalid', violations }, `${violations.map((item) => `INVALID ${item}`).join('\n')}\n`);
@@ -158,8 +155,7 @@ async function emitCommand(args: Arguments): Promise<number> {
   return 0;
 }
 
-// The target is a regenerated editor cache, so emit replaces it. Anything that is not
-// already one is refused rather than overwritten, until --force says otherwise.
+// Emit replaces recognized generated caches. Other files require `--force`.
 async function assertGeneratedTarget(target: string, force: boolean): Promise<void> {
   if (force) return;
   let existing: string;
@@ -227,8 +223,6 @@ function parseArguments(argv: string[]): Arguments {
   return { command, positional, values, flags };
 }
 
-// --dry-run cancels whatever write was asked for, so the exact command line CI runs takes one
-// appended flag to show what it would do.
 function modeFrom(args: Arguments): SyncMode {
   return args.flags.has('apply') && !args.flags.has('dry-run') ? 'apply' : 'dry-run';
 }
@@ -248,8 +242,6 @@ async function storeTargets(args: Arguments): Promise<StoreTarget[]> {
   return [...targets.values()];
 }
 
-// Most explicit source first. The app TOML the Shopify CLI already requires carries the client
-// id, so a caller should not have to cut it out of the file to pass --client-id.
 async function clientIdFrom(args: Arguments): Promise<string> {
   const explicit = oneValue(args, 'client-id', false);
   if (explicit !== undefined) return explicit;
@@ -260,7 +252,7 @@ async function clientIdFrom(args: Arguments): Promise<string> {
 
 async function connectorFrom(args: Arguments, storeCount: number): Promise<Connect> {
   const apiVersion = oneValue(args, 'api-version', false) ?? DEFAULT_API_VERSION;
-  // guarddog: the three documented auth inputs, read here only to reach the named stores.
+  // guarddog: read only the documented authentication variables.
   const clientId = await clientIdFrom(args);
   const clientSecret = process.env.SHOPIFY_APP_SECRET ?? ''; // guarddog: see above
   const token = process.env.SHOPIFY_ADMIN_ACCESS_TOKEN ?? ''; // guarddog: see above
@@ -271,8 +263,7 @@ async function connectorFrom(args: Arguments, storeCount: number): Promise<Conne
       token: await mintAccessToken({ store, clientId, clientSecret }),
     });
   }
-  // Incomplete app credentials fall back rather than fail: a stray SHOPIFY_APP_CLIENT_ID in a
-  // CI image must not break a command a static token can serve on its own.
+  // Ignore incomplete app credentials when a static token can authenticate the command.
   if (token.length > 0 && storeCount === 1) {
     return async (store) => new AdminClient({ store, token, apiVersion });
   }
@@ -282,7 +273,7 @@ async function connectorFrom(args: Arguments, storeCount: number): Promise<Conne
   if (token.length === 0) {
     throw new Error('set SHOPIFY_ADMIN_ACCESS_TOKEN, or SHOPIFY_APP_CLIENT_ID and SHOPIFY_APP_SECRET');
   }
-  throw new Error('SHOPIFY_ADMIN_ACCESS_TOKEN reaches one store; a fleet needs SHOPIFY_APP_CLIENT_ID and SHOPIFY_APP_SECRET');
+  throw new Error('SHOPIFY_ADMIN_ACCESS_TOKEN supports one store; fleets require SHOPIFY_APP_CLIENT_ID and SHOPIFY_APP_SECRET');
 }
 
 async function clientFrom(args: Arguments): Promise<AdminClient> {
@@ -293,7 +284,7 @@ function values(args: Arguments, name: string): string[] {
   return args.values.get(name) ?? [];
 }
 
-// emit regenerates an editor cache in place; pull and compile refuse to clobber anything.
+// Emit updates a cache; pull and compile never overwrite output.
 async function writeOut(out: string, text: string, overwrite = false): Promise<void> {
   const path = resolve(process.cwd(), out);
   if (!overwrite) {
@@ -306,8 +297,7 @@ async function writeOut(out: string, text: string, overwrite = false): Promise<v
   await writeFile(path, text);
 }
 
-// Every command that produces a document delivers it the same way, so one --json shape parses
-// them all. Left-out identities join the object, or reach stderr to keep stdout pipeable.
+// Use one output contract for generated documents. Keep text-mode stdout pipeable.
 interface Delivery {
   key: string;
   value: unknown;
@@ -397,7 +387,7 @@ Options:
   --app-config <path>      Read client_id from a Shopify app TOML
   --apply                  Make the store match the schema
   --force                  Apply updates that can break a live storefront or strand stored values
-  --dry-run                Report the writes --apply would make and make none
+  --dry-run                Preview --apply writes without applying them
   --api-version <YYYY-MM>  Shopify Admin API version (default: ${DEFAULT_API_VERSION})
   --all-owners             Pull every supported owner type
   --all-namespaces         Pull every merchant-owned namespace
@@ -405,9 +395,9 @@ Options:
   --help                   Show help
   --version                Show version
 
-Auth reads SHOPIFY_APP_CLIENT_ID and SHOPIFY_APP_SECRET to mint a short-lived Admin token
-per store, or SHOPIFY_ADMIN_ACCESS_TOKEN for a single store. The client id can also come from
---client-id or --app-config ./shopify.app.toml; the secret is always an environment variable.
+Auth uses SHOPIFY_APP_CLIENT_ID and SHOPIFY_APP_SECRET for per-store short-lived tokens.
+Single-store commands may use SHOPIFY_ADMIN_ACCESS_TOKEN. Pass the client ID with --client-id,
+--app-config, or the environment. SHOPIFY_APP_SECRET must come from the environment.
 `;
 }
 

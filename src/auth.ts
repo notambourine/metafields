@@ -1,7 +1,5 @@
 import { AdminError, normalizeStore, redactSecrets } from './admin.js';
 
-// The two codes a fleet caller treats differently: `app_not_installed` means the store has
-// not enrolled yet, `shop_not_permitted` means the app and the store are in different orgs.
 export class GrantError extends AdminError {
   readonly store: string;
   readonly code: string;
@@ -53,8 +51,7 @@ export async function mintAccessToken(options: MintOptions): Promise<string> {
   throw new GrantError(store, code, detail ?? `token grant returned HTTP ${response.status}`);
 }
 
-// Nothing from the body other than an error string is ever surfaced, so a token in an
-// unexpected shape cannot reach a message.
+// Surface only the error string so unexpected response fields cannot leak tokens.
 async function grantPayload(response: Response): Promise<Record<string, unknown>> {
   try {
     const parsed = await response.json() as unknown;
