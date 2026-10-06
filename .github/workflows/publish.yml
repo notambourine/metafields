@@ -36,7 +36,8 @@ jobs:
   release:
     needs: version
     if: needs.version.outputs.changed == 'true'
-    runs-on: blacksmith-2vcpu-ubuntu-2404
+    # npm trusted publishing rejects self-hosted runners, Blacksmith included.
+    runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
       contents: write
