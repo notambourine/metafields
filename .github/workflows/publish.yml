@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   version:
-    runs-on: ubuntu-slim
+    runs-on: blacksmith-2vcpu-ubuntu-2404
     timeout-minutes: 5
     outputs:
       value: ${{ steps.read.outputs.value }}
@@ -36,7 +36,7 @@ jobs:
   release:
     needs: version
     if: needs.version.outputs.changed == 'true'
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-2vcpu-ubuntu-2404
     timeout-minutes: 5
     permissions:
       contents: write

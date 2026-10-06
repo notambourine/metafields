@@ -12,7 +12,7 @@ permissions:
 
 jobs:
   freshness:
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-2vcpu-ubuntu-2404
     timeout-minutes: 10
     # Reports only: an open issue outlives a red run nobody opens, and holding no ref write
     # keeps a compromised step away from the table it is watching.
