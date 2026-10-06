@@ -13,7 +13,7 @@ MERGE_BASE=$(git merge-base "$BASE" HEAD) || {
 # Paths excluded from the package and its build.
 is_exempt() {
 	case "$1" in
-		.github/* | test/* | test-d/* | scripts/* | .gitignore | PLAN.md) return 0 ;;
+		.github/* | test/* | test-d/* | scripts/* | .gitignore | PLAN.md | AGENTS.md) return 0 ;;
 		# Runtime dependencies also change package.json, which is checked separately.
 		package-lock.json) return 0 ;;
 		*) return 1 ;;
