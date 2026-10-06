@@ -10,8 +10,7 @@ permissions:
 
 jobs:
   betterleaks:
-    # cosign needs envsubst, which ubuntu-slim lacks and cannot install.
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-2vcpu-ubuntu-2404
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -40,7 +39,7 @@ jobs:
           ./betterleaks git "${GITHUB_WORKSPACE}" --no-banner --redact=100 --confidence medium
 
   zizmor:
-    runs-on: ubuntu-slim
+    runs-on: blacksmith-2vcpu-ubuntu-2404
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

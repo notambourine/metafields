@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   version:
-    runs-on: ubuntu-slim
+    runs-on: blacksmith-2vcpu-ubuntu-2404
     timeout-minutes: 5
     outputs:
       value: ${{ steps.read.outputs.value }}
@@ -36,6 +36,7 @@ jobs:
   release:
     needs: version
     if: needs.version.outputs.changed == 'true'
+    # npm trusted publishing rejects self-hosted runners, Blacksmith included.
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
