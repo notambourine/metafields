@@ -30,7 +30,7 @@ updates:
       timezone: America/Chicago
     open-pull-requests-limit: 10
     cooldown:
-      default-days: 2
+      default-days: 1
       semver-major-days: 5
     groups:
       minor-and-patch:
