@@ -160,6 +160,71 @@ test('token minting distinguishes app installation and organization errors', asy
   }
 });
 
+// Retry-After: 0 keeps these tests fast; a thrown fetch error waits the 250ms first backoff.
+function busy(status: number): Response {
+  return Response.json({}, { status, headers: { 'retry-after': '0' } });
+}
+
+test('token minting retries timeouts, rate limits, and server errors', async () => {
+  const answers: Array<() => Response> = [
+    () => { throw new DOMException('The operation was aborted due to timeout', 'TimeoutError'); },
+    () => busy(429),
+    () => busy(503),
+    () => Response.json({ access_token: 'shpca_minted' }),
+  ];
+  let calls = 0;
+  const token = await mintAccessToken({
+    store: 'a.myshopify.com', clientId: 'id', clientSecret: 'secret',
+    fetch: async () => answers[calls++]!(),
+  });
+  assert.equal(token, 'shpca_minted');
+  assert.equal(calls, 4);
+});
+
+test('token minting gives up after its retries and reports the last failure', async () => {
+  let calls = 0;
+  await assert.rejects(mintAccessToken({
+    store: 'a.myshopify.com', clientId: 'id', clientSecret: 'secret',
+    fetch: async () => { calls += 1; return busy(503); },
+  }), (error: unknown) => error instanceof GrantError && error.code === 'http_503');
+  assert.equal(calls, 4, 'three retries by default');
+
+  calls = 0;
+  await assert.rejects(mintAccessToken({
+    store: 'a.myshopify.com', clientId: 'id', clientSecret: 'secret', retries: 1,
+    fetch: async () => { calls += 1; throw new Error('connect failed for shpca_minted_abc'); },
+  }), (error: unknown) => error instanceof GrantError && error.code === 'unreachable'
+    && error.message === 'connect failed for [REDACTED]');
+  assert.equal(calls, 2);
+});
+
+test('token minting refuses a retry count it cannot count down', async () => {
+  for (const retries of [Number.NaN, -1, 1.5, Number.POSITIVE_INFINITY]) {
+    let calls = 0;
+    // The stub refuses after 10 calls, so a missing check fails this test instead of hanging it.
+    await assert.rejects(mintAccessToken({
+      store: 'a.myshopify.com', clientId: 'id', clientSecret: 'secret', retries,
+      fetch: async () => {
+        calls += 1;
+        return calls > 10 ? Response.json({ error: 'stop' }, { status: 400 }) : busy(503);
+      },
+    }), (error: unknown) => error instanceof GrantError && error.code === 'invalid_options');
+    assert.equal(calls, 0, `retries: ${retries} sends nothing`);
+  }
+});
+
+test('token minting does not retry a refused grant', async () => {
+  let calls = 0;
+  await assert.rejects(mintAccessToken({
+    store: 'a.myshopify.com', clientId: 'id', clientSecret: 'secret',
+    fetch: async () => {
+      calls += 1;
+      return Response.json({ error: 'app_not_installed' }, { status: 400 });
+    },
+  }), (error: unknown) => error instanceof GrantError && error.code === 'app_not_installed');
+  assert.equal(calls, 1);
+});
+
 test('fleet reports summarize matches and identify changed shapes', async () => {
   const desired = compileSchema(defineSchema({
     metaobjects: { faq: metaobject({ name: 'FAQ', fields: { question: field.string({ name: 'Question' }) } }) },
