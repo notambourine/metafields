@@ -15,4 +15,6 @@ permissions:
 
 jobs:
   dashes:
+    permissions:
+      contents: read
     uses: notambourine/dash-ratchet/.github/workflows/ratchet.yml@556a4457c467fb9c28a3240f7f030bf9204cb357 # v0.4.0
