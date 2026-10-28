@@ -1,0 +1,18 @@
+name: notambourine
+
+# Keep this name and the job ID stable: the required check uses both.
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  fleet-actions:
+    permissions:
+      contents: read
+    uses: notambourine/fleet-actions/.github/workflows/fleet-ci.yml@3b6ab5d2b588283e483fe678df9fe255a44921ca # v1.11.0
+    with:
+      pnpm-pin: false

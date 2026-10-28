@@ -13,6 +13,8 @@ jobs:
   version:
     runs-on: blacksmith-2vcpu-ubuntu-2404
     timeout-minutes: 5
+    permissions:
+      contents: read
     outputs:
       value: ${{ steps.read.outputs.value }}
       changed: ${{ steps.read.outputs.changed }}
