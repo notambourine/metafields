@@ -107,7 +107,7 @@ Liquid output includes only editor-supported metafields. It omits metaobjects, c
 
 ## Authentication and output
 
-For one store, set `SHOPIFY_ADMIN_ACCESS_TOKEN`. For one store or a fleet, set `SHOPIFY_APP_CLIENT_ID` and `SHOPIFY_APP_SECRET`; the CLI creates a short-lived token per store. The client ID resolves from `--client-id`, `--app-config`, then the environment. Complete app credentials take priority over a static token. Errors redact credentials.
+For one store, set `SHOPIFY_ADMIN_ACCESS_TOKEN`. For one store or a fleet, set `SHOPIFY_APP_CLIENT_ID` and `SHOPIFY_APP_SECRET`; the CLI creates a short-lived token per store, and retries the request after a timeout, HTTP 429, or HTTP 5xx. The client ID resolves from `--client-id`, `--app-config`, then the environment. Complete app credentials take priority over a static token. Errors redact credentials.
 
 Operational commands support `--json` and write one JSON object to stdout. In text mode, generated documents use stdout while `excluded` and `skipped` identities use stderr. With `--out`, the CLI reports the written path instead of the document.
 

@@ -458,13 +458,13 @@ function redactError(error: unknown): Error {
   return new AdminError(error instanceof Error ? error.message : String(error));
 }
 
-function backoff(attempt: number, retryAfter?: string | null): number {
+export function backoff(attempt: number, retryAfter?: string | null): number {
   const seconds = retryAfter === undefined || retryAfter === null ? Number.NaN : Number(retryAfter);
   if (Number.isFinite(seconds)) return Math.min(seconds * 1000, 10_000);
   return Math.min(250 * 2 ** attempt, 4_000);
 }
 
-function delay(milliseconds: number): Promise<void> {
+export function delay(milliseconds: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 
