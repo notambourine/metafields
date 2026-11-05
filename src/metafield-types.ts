@@ -101,7 +101,7 @@ export const METAFIELD_TYPES = {
   mass_flow_rate: { category: 'MEASUREMENT', migratable: true, validations: ['max', 'min'] },
   metaobject_reference: { category: 'REFERENCE', migratable: true, validations: ['metaobject_definition_id', 'metaobject_definition_type'] },
   mixed_reference: { category: 'REFERENCE', migratable: true, validations: ['metaobject_definition_ids', 'metaobject_definition_types'] },
-  money: { category: 'MONEY', migratable: true, validations: [] },
+  money: { category: 'MONEY', migratable: true, validations: ['max', 'min'] },
   multi_line_text_field: { category: 'TEXT', migratable: true, validations: ['max', 'min', 'regex'] },
   number_decimal: { category: 'NUMBER', migratable: true, validations: ['max', 'max_precision', 'min'] },
   number_integer: { category: 'NUMBER', migratable: true, validations: ['max', 'min'] },
