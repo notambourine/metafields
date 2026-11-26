@@ -13,6 +13,6 @@ jobs:
   fleet-actions:
     permissions:
       contents: read
-    uses: notambourine/fleet-actions/.github/workflows/fleet-ci.yml@ba0de050f761500bc0aa23acd0fd5a03211e2377 # v1.12.7
+    uses: notambourine/fleet-actions/.github/workflows/fleet-ci.yml@9bfed8843ebbba09359555e605abfb49a7101326 # v1.12.8
     with:
       pnpm-pin: false
